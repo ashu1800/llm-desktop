@@ -41,6 +41,9 @@ pub fn run() {
             // 自启动时附带 --silent,保证开机后静默进托盘
             Some(vec!["--silent"]),
         ))
+        // 自动更新:检查 GitHub Releases 的 latest.json,下载后校验 minisign 签名安装
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let handle = app.handle().clone();
             let state = tauri::async_runtime::block_on(init_state(&handle))?;

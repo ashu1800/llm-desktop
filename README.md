@@ -72,6 +72,27 @@ gemini   # 模型列表来自 GET /v1beta/models(按密钥可用渠道聚合)
 
 > 提示:监听 `0.0.0.0` 时局域网设备可访问,请把地址中的 `127.0.0.1` 换成本机局域网 IP,并确认密钥分发范围。
 
+## 发布与自动更新
+
+采用 Tauri 官方更新机制:**GitHub Releases 托管产物 + `latest.json` 版本清单 + minisign 签名校验**。客户端启动时(6h 节流)与设置页手动检查 `releases/latest/download/latest.json`,发现新版本后下载安装包、校验签名、静默安装,重启即完成更新。
+
+**发布新版本(维护者操作):**
+
+```bash
+# 1. 同步三处版本号:src-tauri/tauri.conf.json、package.json、src-tauri/Cargo.toml
+# 2. 提交并打标签(CI 自动构建、签名、生成 latest.json、创建 Release)
+git commit -am "release: v0.1.1"
+git tag v0.1.1
+git push origin main --follow-tags
+```
+
+**一次性配置(已完成):**
+- 签名密钥:`~/.tauri/llm-desktop.key`(私钥,**绝不入库**)与 `.key.pub`(公钥,已写入 `tauri.conf.json`);
+- GitHub Secrets:`TAURI_SIGNING_PRIVATE_KEY`(私钥内容)与 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`(空);
+- 工作流:`.github/workflows/release.yml`,推送 `v*` 标签触发,产物为 NSIS 安装包 + `.nsis.zip` 更新包 + `.sig` 签名 + `latest.json`。
+
+> 私钥丢失则无法再签名更新,已分发客户端只能手动重装;更换公钥同样需要用户重装。请妥善备份 `~/.tauri/llm-desktop.key`。
+
 ## 架构
 
 ```
@@ -142,7 +163,13 @@ tray.rs / autostart.rs  托盘 / 开机自启
 20. **(实施登记)** 熔断状态为进程内存态,重启重置(决策 8/§8 已确认);`settings` 表以单行 JSON(key="app")存储,`serde(default)` 保证前向兼容。
 21. **(实施登记)** 请求日志不落盘请求/响应头(仅存体快照):网关密钥与上游凭据均经请求头传输,不存头即天然避免凭据落盘;详情抽屉相应不展示头部,PRD 的"Authorization 打码"以"不落盘"方式达成。
 22. **(实施登记)** "虚拟滚动"以服务端分页实现(每页 ≤200 条,默认 50):桌面端单页数据量小,分页复杂度与内存占用更优。
-23. **(实施登记)** tauri-plugin-updater 暂不接入(决策 17 修订):自动更新需签名密钥与公开更新源,单机自用场景收益低;发布渠道以手动下载安装包为准,后续需要时再补。
+23. **(实施登记)** ~~tauri-plugin-updater 暂不接入~~(已被决策 29 修订:已接入 GitHub Releases 自动更新)。
+24. **(实施登记)** 日志保留清理为每小时幂等删除(等效"每日凌晨清理"的结果,无需定时器精确到凌晨);保留天数 0 不清理,默认 90 天。
+25. **(实施登记)** 配置导入为**整表替换**(渠道/密钥/定价先清空后写入,单事务,失败整体回滚;密钥按旧→新渠道 id 重映射),设置覆盖保存;请求日志不导出不受导入影响。
+26. **(实施登记)** 配置导入后复用 update_settings 的热生效路径(端口/监听平滑切换 + 开机自启同步),并清空按旧渠道 id 记账的熔断状态与密钥轮询起点。
+27. **(实施登记)** 端口热改的旧监听在后台排水:进行中的请求继续在旧端口完成(符合"管理操作不中断请求"),设置命令立即返回,不阻塞 UI。
+28. **(实施登记)** 上游中断/流内错误/空闲超时发生时,网关向客户端补发入口协议内的错误事件(OpenAI `data:{error}`+`[DONE]`、Anthropic `event:error`、Responses `type:error`、Gemini `data:{error}`),客户端 SDK 立即感知失败而非悬挂;流开始后的失败仍不重试、已产生 token 照常计费。
+29. **(实施登记)** 自动更新采用 **GitHub Releases + latest.json + minisign 签名**(tauri-plugin-updater):更新端点指向 `releases/latest/download/latest.json`;签名私钥仅存本机 `~/.tauri/`(gitignore)与仓库 GitHub Secrets,公钥随配置入库;发布经 GitHub Actions 打 tag 自动构建,本地不手工出包。
 24. **(实施登记)** 日志保留清理为每小时幂等删除(等效"每日凌晨清理"的结果,无需定时器精确到凌晨);保留天数 0 不清理,默认 90 天。
 25. **(实施登记)** 配置导入为**整表替换**(渠道/密钥/定价先清空后写入,单事务,失败整体回滚;密钥按旧→新渠道 id 重映射),设置覆盖保存;请求日志不导出不受导入影响。
 26. **(实施登记)** 配置导入后复用 update_settings 的热生效路径(端口/监听平滑切换 + 开机自启同步),并清空按旧渠道 id 记账的熔断状态与密钥轮询起点。

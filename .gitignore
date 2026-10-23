@@ -6,3 +6,7 @@ src-tauri/gen/schemas/
 *.db-wal
 *.db-shm
 .DS_Store
+
+# 签名私钥绝不入库(存 ~/.tauri/ 与 GitHub Secrets)
+*.key
+*.key.pub

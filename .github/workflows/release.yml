@@ -1,0 +1,59 @@
+# 自动发布:推送 vX.Y.Z 标签 → 构建 Windows 安装包 → minisign 签名 → 生成 latest.json → 创建 GitHub Release
+# 客户端经 tauri-plugin-updater 检查 releases/latest/download/latest.json 自动更新。
+#
+# 前置(一次性):仓库 Settings → Secrets and variables → Actions 配置:
+#   TAURI_SIGNING_PRIVATE_KEY            = 私钥内容(~/.tauri/llm-desktop.key,勿入库)
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD   = 私钥口令(无口令则设为空字符串)
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    permissions:
+      contents: write # 创建 Release 与上传产物
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "LLM Gateway ${{ github.ref_name }}"
+          releaseBody: "下载 llm-desktop_*_x64-setup.exe 安装;已安装旧版本的用户将自动收到更新。"
+          releaseDraft: false
+          prerelease: false
+          # 生成 latest.json 并上传到 Release(updater 端点指向 releases/latest/download/latest.json)
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true

@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { AlertTriangle, Save } from "lucide-react";
 import { api } from "@/lib/api";
 import { useSettings } from "@/hooks/use-gateway";
+import { useUpdater } from "@/hooks/use-updater";
 import type { AppSettings, ImportPreview, ThemeMode } from "@/lib/types";
 import {
   Card,
@@ -158,6 +159,13 @@ export function SettingsPage() {
     },
     onError: (e) => toast.error(String(e)),
   });
+
+  const {
+    state: update,
+    runCheck: checkForUpdate,
+    downloadAndInstall,
+    relaunchToUpdate,
+  } = useUpdater();
 
   useEffect(() => {
     if (settings && !form) setForm(structuredClone(settings));
@@ -383,6 +391,78 @@ export function SettingsPage() {
               <SelectItem value="dark">深色</SelectItem>
             </SelectContent>
           </Select>
+        </div>
+      </SectionCard>
+
+      <SectionCard
+        title="软件更新"
+        description="检查 GitHub Releases 上的新版本;下载后经 minisign 签名校验安装,重启即完成更新。"
+      >
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="text-sm">
+              <span className="text-muted-foreground">当前版本 </span>
+              <span className="font-mono">{update.currentVersion ?? "—"}</span>
+              {update.phase === "available" && (
+                <span className="ml-3 text-success">
+                  发现新版本 v{update.nextVersion}
+                </span>
+              )}
+              {update.phase === "uptodate" && (
+                <span className="ml-3 text-muted-foreground">已是最新版本</span>
+              )}
+              {update.phase === "error" && (
+                <span className="ml-3 text-destructive">
+                  检查失败:{update.error}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {update.phase === "ready" ? (
+                <Button size="sm" onClick={relaunchToUpdate}>
+                  重启应用完成更新
+                </Button>
+              ) : update.phase === "available" ? (
+                <Button size="sm" onClick={downloadAndInstall}>
+                  下载并安装
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={update.phase === "checking"}
+                  onClick={checkForUpdate}
+                >
+                  {update.phase === "checking" ? "检查中…" : "检查更新"}
+                </Button>
+              )}
+            </div>
+          </div>
+          {update.phase === "downloading" && (
+            <div className="space-y-1.5">
+              <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-all"
+                  style={{
+                    width:
+                      update.total && update.total > 0
+                        ? `${Math.min(100, (update.downloaded / update.total) * 100)}%`
+                        : "100%",
+                  }}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {update.total
+                  ? `${(update.downloaded / 1024 / 1024).toFixed(1)} / ${(update.total / 1024 / 1024).toFixed(1)} MB`
+                  : `${(update.downloaded / 1024 / 1024).toFixed(1)} MB`}
+              </p>
+            </div>
+          )}
+          {update.notes && update.phase !== "idle" && (
+            <pre className="max-h-32 overflow-auto rounded-md border bg-muted/40 p-3 font-mono text-xs whitespace-pre-wrap">
+              {update.notes}
+            </pre>
+          )}
         </div>
       </SectionCard>
 
