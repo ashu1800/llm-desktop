@@ -80,11 +80,14 @@ gemini   # 模型列表来自 GET /v1beta/models(按密钥可用渠道聚合)
 
 ```bash
 # 1. 同步三处版本号:src-tauri/tauri.conf.json、package.json、src-tauri/Cargo.toml
-# 2. 提交并打标签(CI 自动构建、签名、生成 latest.json、创建 Release)
+#    (CI 会校验标签与 tauri.conf.json 版本一致,不一致直接构建失败)
+# 2. 提交并打**附注**标签(CI 自动构建、签名、生成 latest.json、创建 Release)
 git commit -am "release: v0.1.1"
-git tag v0.1.1
+git tag -a v0.1.1 -m "v0.1.1"   # 必须是附注标签:--follow-tags 只推附注标签
 git push origin main --follow-tags
 ```
+
+> Windows 客户端在更新安装阶段可能被安装器自动关闭并拉起新版本,属正常现象;若安装器未自动拉起,在「设置 → 软件更新」点"重启应用完成更新"。首个版本(v0.1.0)的发布本身就是对发布管线的完整验证;发布后打开已安装应用,在设置页点"检查更新"应显示"已是最新版本",即端点连通正常。
 
 **一次性配置(已完成):**
 - 签名密钥:`~/.tauri/llm-desktop.key`(私钥,**绝不入库**)与 `.key.pub`(公钥,已写入 `tauri.conf.json`);

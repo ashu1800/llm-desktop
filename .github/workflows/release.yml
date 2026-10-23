@@ -24,9 +24,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 标签与 tauri.conf.json 版本不一致会发布出"永远不触发客户端更新"的版本
+      - name: Verify tag matches app version
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          CFG=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [ "$TAG" != "$CFG" ]; then
+            echo "::error::标签 ${GITHUB_REF_NAME} 与 tauri.conf.json 版本 ${CFG} 不一致;请同步版本号(tauri.conf.json / package.json / Cargo.toml)后重新打附注标签"
+            exit 1
+          fi
+
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 12
 
       - uses: actions/setup-node@v4
         with:

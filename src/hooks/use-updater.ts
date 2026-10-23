@@ -21,12 +21,36 @@ export interface UpdaterState {
   /** 已下载字节数(Started 事件给出总长;总长未知时 total 为 null) */
   downloaded: number;
   total: number | null;
+  /** 含来源前缀:"检查失败:…" / "下载/安装失败:…" */
   error: string | null;
+  /** check 已发现新版本:下载失败可原地重试,无需重新检查 */
+  pendingUpdate: boolean;
 }
 
 const LAST_CHECK_KEY = "update.lastCheckMs";
 /** 启动静默检查最小间隔(6 小时),手动检查不受限 */
 const AUTO_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+// 模块级共享:App(启动自动)与设置页(手动)两个 hook 实例共用同一次网络检查
+type CheckOutcome = { update: Update | null } | { error: string };
+let inFlightCheck: Promise<CheckOutcome> | null = null;
+
+function doCheck(): Promise<CheckOutcome> {
+  if (!inFlightCheck) {
+    inFlightCheck = (async () => {
+      try {
+        const update = await check();
+        localStorage.setItem(LAST_CHECK_KEY, String(Date.now()));
+        return { update };
+      } catch (e) {
+        return { error: String(e) };
+      } finally {
+        inFlightCheck = null;
+      }
+    })();
+  }
+  return inFlightCheck;
+}
 
 export function useUpdater(options?: { auto?: boolean }) {
   const auto = options?.auto ?? false;
@@ -38,10 +62,10 @@ export function useUpdater(options?: { auto?: boolean }) {
     downloaded: 0,
     total: null,
     error: null,
+    pendingUpdate: false,
   });
   // check() 返回的 Update 对象必须持有引用才能 downloadAndInstall
   const updateRef = useRef<Update | null>(null);
-  const checking = useRef(false);
 
   const applyEvent = (e: DownloadEvent) => {
     setState((s) => {
@@ -59,28 +83,24 @@ export function useUpdater(options?: { auto?: boolean }) {
   };
 
   const runCheck = useCallback(async () => {
-    if (checking.current) return;
-    checking.current = true;
     setState((s) => ({ ...s, phase: "checking", error: null }));
-    try {
-      const update = await check();
-      updateRef.current = update;
-      setState((s) =>
-        update
-          ? {
-              ...s,
-              phase: "available",
-              nextVersion: update.version,
-              notes: update.body ?? null,
-            }
-          : { ...s, phase: "uptodate" },
-      );
-      localStorage.setItem(LAST_CHECK_KEY, String(Date.now()));
-    } catch (e) {
-      setState((s) => ({ ...s, phase: "error", error: String(e) }));
-    } finally {
-      checking.current = false;
+    const outcome = await doCheck();
+    if ("error" in outcome) {
+      setState((s) => ({ ...s, phase: "error", error: `检查失败: ${outcome.error}` }));
+      return;
     }
+    updateRef.current = outcome.update;
+    setState((s) =>
+      outcome.update
+        ? {
+            ...s,
+            phase: "available",
+            nextVersion: outcome.update.version,
+            notes: outcome.update.body ?? null,
+            pendingUpdate: true,
+          }
+        : { ...s, phase: "uptodate", pendingUpdate: false },
+    );
   }, []);
 
   const downloadAndInstall = useCallback(async () => {
@@ -91,7 +111,7 @@ export function useUpdater(options?: { auto?: boolean }) {
       await update.downloadAndInstall(applyEvent);
       setState((s) => ({ ...s, phase: "ready" }));
     } catch (e) {
-      setState((s) => ({ ...s, phase: "error", error: String(e) }));
+      setState((s) => ({ ...s, phase: "error", error: `下载/安装失败: ${e}` }));
     }
   }, []);
 
@@ -116,6 +136,5 @@ export function useUpdater(options?: { auto?: boolean }) {
     };
   }, [auto, runCheck]);
 
-  // 静默检查发现新版本时由调用方决定提示方式:暴露 phase 变化即可
   return { state, runCheck, downloadAndInstall, relaunchToUpdate };
 }

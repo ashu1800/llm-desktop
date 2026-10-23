@@ -412,9 +412,7 @@ export function SettingsPage() {
                 <span className="ml-3 text-muted-foreground">已是最新版本</span>
               )}
               {update.phase === "error" && (
-                <span className="ml-3 text-destructive">
-                  检查失败:{update.error}
-                </span>
+                <span className="ml-3 text-destructive">{update.error}</span>
               )}
             </div>
             <div className="flex items-center gap-2">
@@ -422,9 +420,10 @@ export function SettingsPage() {
                 <Button size="sm" onClick={relaunchToUpdate}>
                   重启应用完成更新
                 </Button>
-              ) : update.phase === "available" ? (
+              ) : update.phase === "available" ||
+                (update.phase === "error" && update.pendingUpdate) ? (
                 <Button size="sm" onClick={downloadAndInstall}>
-                  下载并安装
+                  {update.phase === "error" ? "重试下载" : "下载并安装"}
                 </Button>
               ) : (
                 <Button
@@ -433,7 +432,11 @@ export function SettingsPage() {
                   disabled={update.phase === "checking"}
                   onClick={checkForUpdate}
                 >
-                  {update.phase === "checking" ? "检查中…" : "检查更新"}
+                  {update.phase === "checking"
+                    ? "检查中…"
+                    : update.phase === "error"
+                      ? "重新检查"
+                      : "检查更新"}
                 </Button>
               )}
             </div>
