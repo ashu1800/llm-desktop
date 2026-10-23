@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Coins, History, Pencil, Plus, Trash2, Wand2, X } from "lucide-react";
@@ -56,7 +56,7 @@ function PriceDialog({
 }) {
   const qc = useQueryClient();
   const [form, setForm] = useState<PriceEntry>(editing ?? ZERO_PRICE);
-  useMemo(() => setForm(editing ?? ZERO_PRICE), [editing]);
+  useEffect(() => setForm(editing ?? ZERO_PRICE), [editing]);
 
   const save = useMutation({
     mutationFn: async () => {

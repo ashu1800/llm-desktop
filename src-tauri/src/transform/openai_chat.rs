@@ -291,32 +291,31 @@ pub fn render_request(ir: &CanonicalRequest) -> (Value, Vec<String>) {
     for m in &ir.messages {
         match m.role {
             Role::User => {
-                let mut tool_results = Vec::new();
+                // 保持块原顺序:ToolResult 就地输出为 tool 消息,其余聚合为 user 消息
                 let mut others: Vec<Block> = Vec::new();
                 for b in &m.blocks {
-                    match b {
-                        Block::ToolResult { .. } => tool_results.push(b.clone()),
-                        other => others.push(other.clone()),
-                    }
-                }
-                // tool 消息必须紧跟 tool_calls,先输出文本内容再输出 tool 结果
-                if !others.is_empty() {
-                    messages.push(json!({
-                        "role": "user",
-                        "content": render_openai_content(&others, &mut dropped),
-                    }));
-                }
-                for tr in tool_results {
-                    if let Block::ToolResult {
-                        tool_use_id, content, ..
-                    } = tr
-                    {
+                    if let Block::ToolResult { tool_use_id, content, .. } = b {
+                        if !others.is_empty() {
+                            messages.push(json!({
+                                "role": "user",
+                                "content": render_openai_content(&others, &mut dropped),
+                            }));
+                            others.clear();
+                        }
                         messages.push(json!({
                             "role": "tool",
                             "tool_call_id": tool_use_id,
                             "content": content,
                         }));
+                    } else {
+                        others.push(b.clone());
                     }
+                }
+                if !others.is_empty() {
+                    messages.push(json!({
+                        "role": "user",
+                        "content": render_openai_content(&others, &mut dropped),
+                    }));
                 }
             }
             Role::Assistant => {
@@ -675,6 +674,18 @@ impl UpstreamSse {
             .and_then(Value::as_array)
             .and_then(|a| a.first())
         else {
+            // 流内错误对象(部分上游以 data: {"error":...} 推送)
+            if let Some(e) = v.get("error") {
+                self.finished = true;
+                out.push(StreamEvent::UpstreamError {
+                    message: e
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("上游返回错误")
+                        .to_string(),
+                });
+                return;
+            }
             // 纯 usage 尾块:若 finish_reason 已见过则收尾
             if self.saw_finish {
                 self.force_finish(out);

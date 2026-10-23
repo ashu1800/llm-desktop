@@ -20,6 +20,7 @@ import {
   fmtYuan,
   matchPrice,
   parseAttempts,
+  rangeFromTs,
   TIME_RANGE_LABELS,
   type TimeRange,
 } from "@/lib/format";
@@ -243,20 +244,6 @@ function StatusCell({ status }: { status: number }) {
   );
 }
 
-function rangeFromTsOrNull(range: TimeRange): number | null {
-  const now = new Date();
-  switch (range) {
-    case "today":
-      return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    case "7d":
-      return now.getTime() - 7 * 86_400_000;
-    case "30d":
-      return now.getTime() - 30 * 86_400_000;
-    default:
-      return null;
-  }
-}
-
 /** yyyy-mm-dd → 当地 0:00 时间戳;空串返回 null */
 function dateInputToTs(s: string, endOfDay = false): number | null {
   if (!s) return null;
@@ -373,9 +360,7 @@ export function LogsPage() {
   const filter = useMemo<LogFilter>(
     () => ({
       fromTs:
-        range === "custom"
-          ? dateInputToTs(customFrom)
-          : rangeFromTsOrNull(range),
+        range === "custom" ? dateInputToTs(customFrom) : rangeFromTs(range),
       toTs: range === "custom" ? dateInputToTs(customTo, true) : null,
       keyId: keyId === "all" ? null : Number(keyId),
       channelId: channelId === "all" ? null : Number(channelId),

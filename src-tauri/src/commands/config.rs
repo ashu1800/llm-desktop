@@ -6,8 +6,10 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
+use crate::autostart;
 use crate::billing::pricing::PriceEntry;
 use crate::events::{self, GatewayEvent};
+use crate::server::manager;
 use crate::settings::AppSettings;
 use crate::state::AppState;
 use crate::store::api_keys::ApiKey;
@@ -167,13 +169,26 @@ pub async fn import_config_apply(
         .await
         .map_err(|e| format!("提交导入事务失败: {e}"))?;
 
-    // 设置覆盖 + 全量重载缓存
+    // 设置覆盖 + 热生效(与 update_settings 一致:监听变更平滑切换、自启同步注册表)
     let new_settings = cfg.settings.normalized();
+    let old = state.current_settings();
+    let addr_changed =
+        old.port != new_settings.port || old.listen_addr != new_settings.listen_addr;
+    if addr_changed {
+        let target = manager::parse_listen(&new_settings.listen_addr, new_settings.port)?;
+        manager::apply_listen_change(&state, target).await?;
+    }
+    if old.autostart != new_settings.autostart {
+        autostart::set_enabled(&app, new_settings.autostart)?;
+    }
     store::settings::save(&state.db, &new_settings).await?;
     *state.settings.write().unwrap() = new_settings;
     state.reload_channels().await?;
     state.reload_keys().await?;
     state.reload_prices().await?;
+    // 渠道 id 全部重排:清空按旧 id 记账的熔断状态与密钥轮询起点
+    state.breakers.clear_all();
+    state.key_counters.lock().unwrap().clear();
 
     events::emit(&app, GatewayEvent::SettingsChanged);
     tray::refresh(&app);

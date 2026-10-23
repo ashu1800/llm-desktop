@@ -324,12 +324,9 @@ async fn gateway_inner(
                         Err(f) => {
                             attempts.push(attempt_json(ch, 200, f.elapsed_ms, &f.reason));
                             last_error = f.reason;
-                            if f.retry_same_key {
-                                key_pos -= 1;
-                                allow_inject = false;
-                                continue;
-                            }
-                            break; // 未写回任何字节,切下一渠道
+                            // 未写回任何字节,切下一渠道;上游故障(TTFT 超时/空流)计入熔断
+                            channel_failed = true;
+                            break;
                         }
                     }
                 }
@@ -350,11 +347,8 @@ async fn gateway_inner(
                             &f.reason,
                         ));
                         last_error = f.reason;
-                        if f.retry_same_key {
-                            key_pos -= 1;
-                            allow_inject = false;
-                            continue;
-                        }
+                        // 上游故障(总时长超时/非法 JSON/error body)计入熔断
+                        channel_failed = true;
                         break;
                     }
                 }
@@ -372,12 +366,20 @@ async fn gateway_inner(
             if retry_after_hdr.is_some() {
                 retry_after = retry_after_hdr;
             }
-            let err_body = resp.text().await.unwrap_or_default();
+            let up_content_type = resp
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("application/json")
+                .to_string();
+            let err_body = match tokio::time::timeout(Duration::from_secs(5), resp.text()).await {
+                Ok(Ok(s)) => s,
+                _ => String::new(),
+            };
             if status == 400 && prep.injected_stream_options && err_body.contains("stream_options")
             {
-                // 上游不认识 stream_options:去掉重发一次
+                // 上游不认识 stream_options:同 key 去掉该字段重发一次
                 attempts.push(attempt_json(ch, status, t_try.elapsed().as_millis() as i64, "上游拒绝 stream_options,降级重试"));
-                key_pos -= 1;
                 allow_inject = false;
                 continue;
             }
@@ -429,7 +431,9 @@ async fn gateway_inner(
                 req_snapshot,
                 resp_snapshot: Some(truncate_snapshot(&state, &err_body)),
             });
-            return passthrough_error_response(status, &err_body);
+            let mut r = passthrough_error_response(status, &err_body, &up_content_type);
+            add_gw_headers(&mut r, &ch.name, attempts.len());
+            return r;
         }
         if channel_failed {
             // 熔断器记账(429 时参考 Retry-After 调整冷却)
@@ -657,20 +661,13 @@ struct FailReason {
     reason: String,
     status: Option<u16>,
     elapsed_ms: i64,
-    retry_same_key: bool,
 }
 
-fn fail(
-    reason: String,
-    status: Option<u16>,
-    started_try: Instant,
-    retry_same_key: bool,
-) -> FailReason {
+fn fail(reason: String, status: Option<u16>, started_try: Instant) -> FailReason {
     FailReason {
         reason,
         status,
         elapsed_ms: started_try.elapsed().as_millis() as i64,
-        retry_same_key,
     }
 }
 
@@ -777,16 +774,16 @@ async fn handle_non_stream(
     let t = Instant::now();
     let bytes = tokio::time::timeout(total_timeout, resp.bytes())
         .await
-        .map_err(|_| fail("非流式总时长超时".into(), Some(200), t, false))?
-        .map_err(|e| fail(format!("读取响应失败: {e}"), Some(200), t, false))?;
+        .map_err(|_| fail("非流式总时长超时".into(), Some(200), t))?
+        .map_err(|e| fail(format!("读取响应失败: {e}"), Some(200), t))?;
 
     let v: Value = serde_json::from_slice(&bytes)
-        .map_err(|e| fail(format!("响应不是合法 JSON: {e}"), Some(200), t, false))?;
+        .map_err(|e| fail(format!("响应不是合法 JSON: {e}"), Some(200), t))?;
     let parsed = match parse_upstream_response(ch.protocol, &v) {
-        Err(e) => return Err(fail(format!("响应结构异常: {e}"), Some(200), t, false)),
+        Err(e) => return Err(fail(format!("响应结构异常: {e}"), Some(200), t)),
         Ok(UpstreamParsed::Err(msg)) => {
             // 200 但 body 为 error 对象:视为渠道故障,可 failover
-            return Err(fail(format!("上游错误: {msg}"), Some(200), t, false));
+            return Err(fail(format!("上游错误: {msg}"), Some(200), t));
         }
         Ok(UpstreamParsed::Ok {
             blocks,
@@ -900,11 +897,10 @@ async fn start_stream(
                 format!("首字超时({}s):上游未产生任何输出", timeouts.ttft.as_secs()),
                 Some(200),
                 t,
-                false,
             ))
         }
-        Ok(None) => return Err(fail("上游流为空".into(), Some(200), t, false)),
-        Ok(Some(Err(e))) => return Err(fail(format!("上游流读取失败: {e}"), Some(200), t, false)),
+        Ok(None) => return Err(fail("上游流为空".into(), Some(200), t)),
+        Ok(Some(Err(e))) => return Err(fail(format!("上游流读取失败: {e}"), Some(200), t)),
         Ok(Some(Ok(bytes))) => bytes,
     };
     let ttft_ms = t.elapsed().as_millis() as i64;
@@ -1239,11 +1235,11 @@ fn err_body_excerpt(body: &str) -> String {
 }
 
 /// 其他 4xx:原始错误体透传(状态码原样)
-fn passthrough_error_response(status: u16, body: &str) -> Response {
+fn passthrough_error_response(status: u16, body: &str, content_type: &str) -> Response {
     let code = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
     Response::builder()
         .status(code)
-        .header("content-type", "application/json")
+        .header("content-type", content_type)
         .body(axum::body::Body::from(body.to_string()))
         .unwrap()
 }

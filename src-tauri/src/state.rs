@@ -36,6 +36,8 @@ pub struct AppState {
     pub http: Arc<Mutex<HashMap<String, reqwest::Client>>>,
     /// 渠道密钥池轮询起点
     pub key_counters: Arc<Mutex<HashMap<i64, usize>>>,
+    /// 监听生命周期互斥:start/stop/端口切换串行化,避免并发更新句柄丢失
+    pub listen_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AppState {
@@ -58,6 +60,7 @@ impl AppState {
             event_tx,
             http: Arc::new(Mutex::new(HashMap::new())),
             key_counters: Arc::new(Mutex::new(HashMap::new())),
+            listen_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 

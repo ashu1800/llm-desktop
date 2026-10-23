@@ -30,6 +30,7 @@ pub fn status_of(state: &AppState) -> ServiceStatus {
 
 /// 启动代理监听(幂等:已运行时直接返回当前地址)
 pub async fn start(state: &AppState, app: &AppHandle) -> Result<SocketAddr, String> {
+    let _guard = state.listen_lock.lock().await;
     {
         let guard = state.server.lock().unwrap();
         if let Some(h) = guard.as_ref() {
@@ -49,6 +50,7 @@ pub async fn start(state: &AppState, app: &AppHandle) -> Result<SocketAddr, Stri
 
 /// 停止代理监听(幂等)
 pub async fn stop(state: &AppState, app: &AppHandle) -> Result<(), String> {
+    let _guard = state.listen_lock.lock().await;
     let old = state.server.lock().unwrap().take();
     if let Some(h) = old {
         h.stop().await;
@@ -60,14 +62,16 @@ pub async fn stop(state: &AppState, app: &AppHandle) -> Result<(), String> {
 /// 应用新的监听地址:运行中 → 平滑重启;未运行 → 仅探测端口可用性。
 /// 绑定失败(如端口被占用)时保持原监听不变并返回错误。
 pub async fn apply_listen_change(state: &AppState, target: SocketAddr) -> Result<(), String> {
+    let _guard = state.listen_lock.lock().await;
     let running = state.server.lock().unwrap().is_some();
     if running {
         let new_handle = super::spawn(state.clone(), target)
             .await
             .map_err(|e| format!("端口切换失败,{target} 无法监听(可能被占用): {e}"))?;
         let old = state.server.lock().unwrap().replace(new_handle);
+        // 旧监听后台排水:进行中的请求继续完成(PRD:管理操作不中断请求),命令不再阻塞 UI
         if let Some(old) = old {
-            old.stop().await;
+            tauri::async_runtime::spawn(async move { old.stop().await; });
         }
     } else {
         super::check_bind(target)

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -154,7 +154,7 @@ function ChannelDialog({
 }) {
   const qc = useQueryClient();
   const [form, setForm] = useState<Channel | null>(editing);
-  useMemo(() => setForm(editing), [editing]);
+  useEffect(() => setForm(editing), [editing]);
 
   const saveMutation = useMutation({
     mutationFn: async () => {

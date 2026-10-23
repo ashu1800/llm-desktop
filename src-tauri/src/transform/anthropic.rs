@@ -265,6 +265,9 @@ pub fn render_request(ir: &CanonicalRequest) -> (Value, Vec<String>) {
             })
             .collect();
         if has_cc {
+            if ir.system.iter().any(|b| matches!(b, Block::Image { .. })) {
+                push_drop(&mut dropped, "system(image)");
+            }
             let blocks: Vec<Value> = ir
                 .system
                 .iter()

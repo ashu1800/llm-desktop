@@ -34,7 +34,7 @@ import {
   useTrend,
   useUnpricedModels,
 } from "@/hooks/use-gateway";
-import { fmtMs, fmtYuan, TIME_RANGE_LABELS, type TimeRange } from "@/lib/format";
+import { fmtMs, fmtYuan, rangeFromTs, TIME_RANGE_LABELS, type TimeRange } from "@/lib/format";
 import type { LogFilter } from "@/lib/types";
 import {
   Card,
@@ -65,20 +65,6 @@ const PIE_COLORS = [
   "#84cc16",
   "#64748b",
 ];
-
-function rangeFromTsOrNull(range: TimeRange): number | null {
-  const now = new Date();
-  switch (range) {
-    case "today":
-      return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    case "7d":
-      return now.getTime() - 7 * 86_400_000;
-    case "30d":
-      return now.getTime() - 30 * 86_400_000;
-    default:
-      return null;
-  }
-}
 
 function trendLabel(ts: number, bucket: "hour" | "day"): string {
   const d = new Date(ts);
@@ -118,7 +104,7 @@ export function DashboardPage() {
   const [bucket, setBucket] = useState<"hour" | "day">("hour");
 
   const filter = useMemo<LogFilter>(
-    () => ({ fromTs: rangeFromTsOrNull(range), offset: 0, limit: 1 }),
+    () => ({ fromTs: rangeFromTs(range), offset: 0, limit: 1 }),
     [range],
   );
 

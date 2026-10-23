@@ -238,6 +238,11 @@ impl BreakerTable {
             None => Transition { state: State::Closed, remaining_secs: 0 },
         }
     }
+
+    /// 清空全部渠道状态(配置导入后渠道 id 全部重排时调用)
+    pub fn clear_all(&self) {
+        self.inner.lock().unwrap().clear();
+    }
 }
 
 #[cfg(test)]

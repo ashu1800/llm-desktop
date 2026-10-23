@@ -5,6 +5,7 @@
 use std::time::Duration;
 
 use axum::body::Body;
+use serde_json::json;
 use tokio::time::MissedTickBehavior;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
@@ -150,6 +151,7 @@ pub fn start_relay(
                     if tx.send(Ok(chunk.clone())).await.is_err() {
                         error = Some("客户端已断开".into());
                         return finish(
+                            entry,
                             tx,
                             on_done,
                             ttft_ms,
@@ -157,7 +159,8 @@ pub fn start_relay(
                             output_text,
                             tool_calls,
                             error,
-                        );
+                        )
+                        .await;
                     }
                 }
                 parser.feed(&chunk, &mut sse_events);
@@ -193,6 +196,7 @@ pub fn start_relay(
                     }
                     if error.is_some() {
                         return finish(
+                            entry,
                             tx,
                             on_done,
                             ttft_ms,
@@ -200,7 +204,8 @@ pub fn start_relay(
                             output_text,
                             tool_calls,
                             error,
-                        );
+                        )
+                        .await;
                     }
                 }
             }};
@@ -253,6 +258,7 @@ pub fn start_relay(
             }
         }
         finish(
+            entry,
             tx,
             on_done,
             ttft_ms,
@@ -261,12 +267,14 @@ pub fn start_relay(
             tool_calls,
             error,
         )
+        .await;
     });
     Body::from_stream(ReceiverStream::new(rx))
 }
 
 #[allow(clippy::too_many_arguments)]
-fn finish(
+async fn finish(
+    entry: EntryProto,
     tx: tokio::sync::mpsc::Sender<Result<axum::body::Bytes, std::io::Error>>,
     on_done: Box<dyn FnOnce(StreamOutcome) + Send>,
     ttft_ms: i64,
@@ -275,6 +283,13 @@ fn finish(
     tool_calls: Vec<(String, String, String)>,
     error: Option<String>,
 ) {
+    // 上游中断/超时:补发协议内错误事件,让客户端 SDK 立即感知失败而非悬挂到超时
+    if let Some(msg) = &error {
+        if msg != "客户端已断开" {
+            let chunk: Chunk = entry_error_chunk(entry, msg).into();
+            let _ = tx.send(Ok(chunk)).await;
+        }
+    }
     drop(tx);
     on_done(StreamOutcome {
         ttft_ms,
@@ -283,4 +298,41 @@ fn finish(
         tool_calls,
         error,
     });
+}
+
+/// 按入口协议构造流内错误事件(上游中断/空闲超时时补发,客户端可立即失败)
+fn entry_error_chunk(entry: EntryProto, message: &str) -> Vec<u8> {
+    match entry {
+        EntryProto::OpenAi => format!(
+            "data: {}
+
+data: [DONE]
+
+",
+            json!({"error": {"message": message, "type": "gateway_error", "code": "upstream_error"}})
+        )
+        .into_bytes(),
+        EntryProto::Anthropic => format!(
+            "event: error
+data: {}
+
+",
+            json!({"type": "error", "error": {"type": "api_error", "message": message}})
+        )
+        .into_bytes(),
+        EntryProto::Responses => format!(
+            "data: {}
+
+",
+            json!({"type": "error", "code": "upstream_error", "message": message})
+        )
+        .into_bytes(),
+        EntryProto::Gemini => format!(
+            "data: {}
+
+",
+            json!({"error": {"code": 502, "message": message, "status": "UNAVAILABLE"}})
+        )
+        .into_bytes(),
+    }
 }

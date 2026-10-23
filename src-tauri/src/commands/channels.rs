@@ -95,9 +95,9 @@ pub async fn test_channel(state: State<'_, AppState>, id: i64) -> Result<TestCha
             req = req.header("x-goog-api-key", &key);
         }
     }
-    let latency = t.elapsed().as_millis() as i64;
     match req.send().await {
         Ok(r) => {
+            let latency = t.elapsed().as_millis() as i64;
             let status = r.status().as_u16();
             let body = r.text().await.unwrap_or_default();
             if (200..300).contains(&status) {
@@ -117,7 +117,7 @@ pub async fn test_channel(state: State<'_, AppState>, id: i64) -> Result<TestCha
         }
         Err(e) => Ok(TestChannelResult {
             ok: false,
-            latency_ms: latency,
+            latency_ms: t.elapsed().as_millis() as i64,
             message: format!("请求失败: {e}"),
         }),
     }

@@ -496,7 +496,12 @@ pub fn parse_chunk(v: &Value, call_counter: &mut u32) -> GeminiChunk {
                 for p in parts {
                     if let Some(text) = p.get("text").and_then(Value::as_str) {
                         if !text.is_empty() {
-                            events.push(StreamEvent::TextDelta { block: 0, text: text.to_string() });
+                            // thought 标志 = 思考摘要,不得混入正文
+                            if p.get("thought").and_then(Value::as_bool).unwrap_or(false) {
+                                events.push(StreamEvent::ReasoningDelta { text: text.to_string() });
+                            } else {
+                                events.push(StreamEvent::TextDelta { block: 0, text: text.to_string() });
+                            }
                         }
                     } else if let Some(fc) = p.get("functionCall") {
                         *call_counter += 1;
@@ -559,6 +564,16 @@ pub fn parse_response_json(v: &Value) -> Result<GeminiParsed, String> {
                     blocks.push(Block::Text {
                         text: text.clone(),
                         cache_control: None,
+                    });
+                }
+            }
+            StreamEvent::ReasoningDelta { text } => {
+                if let Some(Block::Thinking { text: t, .. }) = blocks.last_mut() {
+                    t.push_str(text);
+                } else {
+                    blocks.push(Block::Thinking {
+                        text: text.clone(),
+                        signature: None,
                     });
                 }
             }

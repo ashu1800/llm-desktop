@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -106,7 +106,7 @@ function KeyDialog({
   const { data: channels } = useChannels();
   const [form, setForm] = useState<ApiKey | null>(editing);
   const [creating, setCreating] = useState(false);
-  useMemo(() => {
+  useEffect(() => {
     setForm(editing);
     setCreating(editing?.id === 0);
   }, [editing]);
