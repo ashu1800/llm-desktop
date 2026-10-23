@@ -1,0 +1,53 @@
+[package]
+name = "llm-desktop"
+version = "0.1.0"
+description = "本地 LLM API 网关"
+edition = "2021"
+
+[lib]
+name = "llm_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-log = "2"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net"] }
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors"] }
+sqlx = { version = "0.8", default-features = false, features = [
+  "runtime-tokio",
+  "sqlite",
+  "migrate",
+  "macros",
+] }
+tokio-stream = "0.1"
+rand = "0.9"
+tiktoken-rs = "0.6"
+reqwest = { version = "0.12", default-features = false, features = [
+  "rustls-tls",
+  "json",
+  "stream",
+  "gzip",
+  "brotli",
+  "deflate",
+  "socks",
+  "http2",
+] }
+
+[dev-dependencies]
+wiremock = "0.6"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = true
