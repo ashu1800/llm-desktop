@@ -148,9 +148,9 @@ async fn init_state(handle: &tauri::AppHandle) -> Result<AppState, Box<dyn std::
     let db = store::init_pool(&data_dir.join("gateway.db")).await?;
     let settings = store::settings::load(&db).await?;
 
-    // 日志批量写入任务:mpsc 队列满时丢弃,不阻塞响应
+    // 日志批量写入任务:mpsc 队列满时丢弃,不阻塞响应;落库后广播事件驱动前端实时刷新
     let (log_tx, log_rx) = mpsc::channel(store::logs::QUEUE_SIZE);
-    store::logs::spawn_writer(db.clone(), log_rx);
+    store::logs::spawn_writer(db.clone(), log_rx, handle.clone());
 
     // 网关事件转发任务:proxy 在 axum handler 内发事件,这里转发到前端 + 同步托盘
     let (event_tx, mut event_rx) = mpsc::channel::<events::GatewayEvent>(256);

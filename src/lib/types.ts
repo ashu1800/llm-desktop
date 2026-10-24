@@ -40,7 +40,8 @@ export interface ServiceStatus {
 export type GatewayEvent =
   | { type: "serviceStatus"; running: boolean; addr: string | null }
   | { type: "settingsChanged" }
-  | { type: "breakerChanged"; channelId: number; state: string };
+  | { type: "breakerChanged"; channelId: number; state: string }
+  | { type: "requestLogged" };
 
 export type PageKey =
   | "dashboard"

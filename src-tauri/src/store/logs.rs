@@ -42,7 +42,7 @@ const BATCH: usize = 50;
 /// 批量缓冲窗口
 const FLUSH_INTERVAL_MS: u64 = 200;
 
-pub fn spawn_writer(pool: SqlitePool, mut rx: Receiver<RequestLog>) {
+pub fn spawn_writer(pool: SqlitePool, mut rx: Receiver<RequestLog>, app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let mut buf: Vec<RequestLog> = Vec::with_capacity(BATCH);
         loop {
@@ -64,6 +64,8 @@ pub fn spawn_writer(pool: SqlitePool, mut rx: Receiver<RequestLog>) {
                 log::warn!("日志批量写入失败({} 条): {e}", buf.len());
             }
             buf.clear();
+            // 落库成功即广播:前端实时刷新日志表与统计(失败也发,低频轮询兜底)
+            crate::events::emit(&app, crate::events::GatewayEvent::RequestLogged);
             if rx.is_closed() && buf.is_empty() {
                 break;
             }

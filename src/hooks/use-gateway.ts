@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { listenGatewayEvents } from "@/lib/events";
@@ -35,11 +35,13 @@ export function useBreakerStates() {
 
 // ---------- 日志与统计(M7) ----------
 
-export function useLogs(filter: LogFilter, live: boolean) {
+// 日志/统计实时同步:后端批量落库后广播 requestLogged 事件(见 useGatewayEvents),
+// 前端失效对应查询立即刷新;不再定时轮询
+
+export function useLogs(filter: LogFilter) {
   return useQuery({
     queryKey: ["logs", filter],
     queryFn: () => api.queryLogs(filter),
-    refetchInterval: live ? 10_000 : false,
   });
 }
 
@@ -47,7 +49,6 @@ export function useStats(filter: LogFilter) {
   return useQuery({
     queryKey: ["stats", filter],
     queryFn: () => api.getStats(filter),
-    refetchInterval: 10_000,
   });
 }
 
@@ -63,9 +64,14 @@ export function useServiceStatus() {
 
 export function useGatewayEvents() {
   const qc = useQueryClient();
+  // live 经 ref 透传:监听器只注册一次,开关变化不重挂、不丢事件
+  const liveRef = useRef(true);
+  liveRef.current = useAppStore((s) => s.logsLive);
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
+    // requestLogged 防抖 300ms:批量写入每次落库都广播,合并短时间内的多批为一次刷新
+    let logDebounce: ReturnType<typeof setTimeout> | undefined;
     listenGatewayEvents((event) => {
       if (event.type === "serviceStatus") {
         qc.setQueryData(["service"], {
@@ -76,6 +82,12 @@ export function useGatewayEvents() {
         qc.invalidateQueries({ queryKey: ["settings"] });
       } else if (event.type === "breakerChanged") {
         qc.invalidateQueries({ queryKey: ["breakers"] });
+      } else if (event.type === "requestLogged" && liveRef.current) {
+        clearTimeout(logDebounce);
+        logDebounce = setTimeout(() => {
+          qc.invalidateQueries({ queryKey: ["logs"] });
+          qc.invalidateQueries({ queryKey: ["stats"] });
+        }, 300);
       }
     }).then((u) => {
       if (disposed) u();
@@ -83,6 +95,7 @@ export function useGatewayEvents() {
     });
     return () => {
       disposed = true;
+      clearTimeout(logDebounce);
       unlisten?.();
     };
   }, [qc]);
