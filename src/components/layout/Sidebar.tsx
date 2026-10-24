@@ -10,22 +10,20 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { PageKey } from "@/lib/types";
-import { Badge } from "@/components/ui/badge";
 
 interface NavItem {
   key: PageKey;
   label: string;
   icon: LucideIcon;
-  milestone?: string;
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { key: "dashboard", label: "仪表盘", icon: LayoutDashboard },
-  { key: "logs", label: "请求日志", icon: ScrollText, milestone: "M7" },
-  { key: "channels", label: "渠道管理", icon: Cable, milestone: "M3" },
-  { key: "keys", label: "密钥管理", icon: KeyRound, milestone: "M3" },
-  { key: "pricing", label: "模型定价", icon: Coins, milestone: "M6" },
-  { key: "settings", label: "设置", icon: Settings },
+  { key: "dashboard", label: "数据总览", icon: LayoutDashboard },
+  { key: "logs", label: "请求日志", icon: ScrollText },
+  { key: "channels", label: "渠道管理", icon: Cable },
+  { key: "keys", label: "密钥管理", icon: KeyRound },
+  { key: "pricing", label: "模型定价", icon: Coins },
+  { key: "settings", label: "应用设置", icon: Settings },
 ];
 
 interface SidebarProps {
@@ -46,7 +44,7 @@ export function Sidebar({ page, onNavigate }: SidebarProps) {
         </div>
       </div>
       <nav className="flex-1 space-y-1 p-3">
-        {NAV_ITEMS.map(({ key, label, icon: Icon, milestone }) => (
+        {NAV_ITEMS.map(({ key, label, icon: Icon }) => (
           <button
             key={key}
             onClick={() => onNavigate(key)}
@@ -59,17 +57,10 @@ export function Sidebar({ page, onNavigate }: SidebarProps) {
           >
             <Icon className="h-4 w-4 shrink-0" />
             <span className="flex-1 text-left">{label}</span>
-            {milestone && (
-              <Badge variant="muted" className="px-1.5 py-0 text-[10px]">
-                {milestone}
-              </Badge>
-            )}
           </button>
         ))}
       </nav>
-      <div className="border-t p-3 text-[11px] text-muted-foreground">
-        v0.1.0 · M1 骨架
-      </div>
+      <div className="border-t p-3 text-[11px] text-muted-foreground">v0.1.0</div>
     </aside>
   );
 }

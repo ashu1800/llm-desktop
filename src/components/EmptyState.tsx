@@ -5,7 +5,6 @@ interface EmptyStateProps {
   icon: LucideIcon;
   title: string;
   description: string;
-  milestone?: string;
   className?: string;
 }
 
@@ -13,7 +12,6 @@ export function EmptyState({
   icon: Icon,
   title,
   description,
-  milestone,
   className,
 }: EmptyStateProps) {
   return (
@@ -30,11 +28,6 @@ export function EmptyState({
         <p className="font-medium">{title}</p>
         <p className="max-w-md text-sm text-muted-foreground">{description}</p>
       </div>
-      {milestone && (
-        <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-          计划于 {milestone} 落地
-        </span>
-      )}
     </div>
   );
 }

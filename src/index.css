@@ -65,3 +65,28 @@
     @apply bg-background text-foreground antialiased;
   }
 }
+
+/* 滚动条:跟随主题变量(WebView2/Chromium 用 webkit 伪元素,Firefox 用 scrollbar-color) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.4) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+  background-color: hsl(var(--muted-foreground) / 0.4);
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: hsl(var(--muted-foreground) / 0.6);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}

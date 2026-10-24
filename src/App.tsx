@@ -26,7 +26,7 @@ export default function App() {
     if (updateState.phase === "available" && !updateNotified.current) {
       updateNotified.current = true;
       toast.info(`发现新版本 v${updateState.nextVersion}`, {
-        description: "前往「设置 → 软件更新」下载安装",
+        description: "前往「应用设置 → 软件更新」下载安装",
       });
     }
   }, [updateState.phase, updateState.nextVersion]);

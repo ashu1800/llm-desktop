@@ -9,12 +9,12 @@ import { cn } from "@/lib/utils";
 import type { PageKey } from "@/lib/types";
 
 const PAGE_TITLES: Record<PageKey, string> = {
-  dashboard: "仪表盘",
+  dashboard: "数据总览",
   logs: "请求日志",
   channels: "渠道管理",
   keys: "密钥管理",
   pricing: "模型定价",
-  settings: "设置",
+  settings: "应用设置",
 };
 
 interface TopBarProps {
