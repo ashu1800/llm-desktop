@@ -1,8 +1,12 @@
 import { useMemo, useState } from "react";
 import {
   AlertTriangle,
+  CircleCheck,
+  CircleDollarSign,
   Coins,
+  Link2,
   Zap,
+  type LucideIcon,
 } from "lucide-react";
 import {
   Bar,
@@ -20,14 +24,24 @@ import {
   YAxis,
 } from "recharts";
 import {
+  useApiKeys,
   useBreakerStates,
   useChannelStats,
+  useChannels,
   useModelStats,
   useStats,
   useTrend,
   useUnpricedModels,
 } from "@/hooks/use-gateway";
-import { fmtMs, fmtYuan, rangeFromTs, TIME_RANGE_LABELS, type TimeRange } from "@/lib/format";
+import {
+  cacheHitRate,
+  fmtK,
+  fmtMs,
+  fmtYuan,
+  rangeFromTs,
+  TIME_RANGE_LABELS,
+  type TimeRange,
+} from "@/lib/format";
 import type { LogFilter } from "@/lib/types";
 import {
   Card,
@@ -66,37 +80,72 @@ function trendLabel(ts: number, bucket: "hour" | "day"): string {
     : `${String(d.getHours()).padStart(2, "0")}:00`;
 }
 
+// 汇总卡:左图标色块 + 右标签/数值(数值同色)/小字提示
 function StatCard({
-  title,
+  icon: Icon,
+  tile,
+  valueClass,
+  label,
   value,
   hint,
 }: {
-  title: string;
+  icon: LucideIcon;
+  tile: string;
+  valueClass: string;
+  label: string;
   value: string;
-  hint?: string;
+  hint: string;
 }) {
   return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardDescription>{title}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div className="text-2xl font-semibold tabular-nums">{value}</div>
-        {hint && <div className="mt-1 text-xs text-muted-foreground">{hint}</div>}
+    <Card className="py-4">
+      <CardContent className="flex items-center gap-3 px-4 py-0">
+        <div
+          className={cn(
+            "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg",
+            tile,
+          )}
+        >
+          <Icon className="h-5 w-5" />
+        </div>
+        <div className="min-w-0">
+          <div className="text-xs text-muted-foreground">{label}</div>
+          <div
+            className={cn(
+              "truncate text-xl font-semibold tabular-nums leading-tight",
+              valueClass,
+            )}
+          >
+            {value}
+          </div>
+          <div className="truncate text-xs text-muted-foreground">{hint}</div>
+        </div>
       </CardContent>
     </Card>
   );
 }
 
+// 仪表盘时间分段(截图样式:今天/近3天/近7天/近30天,无"全部")
+const DASH_RANGES: TimeRange[] = ["today", "3d", "7d", "30d"];
+
 export function DashboardPage() {
   const { data: breakers } = useBreakerStates();
   const { data: unpriced } = useUnpricedModels();
+  const { data: channels } = useChannels();
+  const { data: keys } = useApiKeys();
   const [range, setRange] = useState<TimeRange>("today");
+  const [channelFilter, setChannelFilter] = useState("all");
+  const [keyFilter, setKeyFilter] = useState("all");
   const [bucket, setBucket] = useState<"hour" | "day">("hour");
 
   const filter = useMemo<LogFilter>(
-    () => ({ fromTs: rangeFromTs(range), offset: 0, limit: 1 }),
-    [range],
+    () => ({
+      fromTs: rangeFromTs(range),
+      channelId: channelFilter === "all" ? null : Number(channelFilter),
+      keyId: keyFilter === "all" ? null : Number(keyFilter),
+      offset: 0,
+      limit: 1,
+    }),
+    [range, channelFilter, keyFilter],
   );
 
   const { data: stats } = useStats(filter);
@@ -105,9 +154,9 @@ export function DashboardPage() {
   const { data: topModels } = useModelStats(filter);
 
   const openBreakers = (breakers ?? []).filter((b) => b.state !== "closed");
-  const errorRate =
+  const successRate =
     stats && stats.count > 0
-      ? `${((stats.errorCount / stats.count) * 100).toFixed(1)}%`
+      ? `${(((stats.count - stats.errorCount) / stats.count) * 100).toFixed(1)}%`
       : "—";
   const trendData = (trend ?? []).map(([ts, count, cost]) => ({
     ts,
@@ -150,60 +199,95 @@ export function DashboardPage() {
         </div>
       )}
 
-      {/* 统计范围(联动下方卡片与图表) */}
-      <div className="flex items-center justify-end gap-2">
-        <span className="text-xs text-muted-foreground">统计范围</span>
+      {/* 筛选:时间分段 + 渠道/密钥,联动下方卡片与图表 */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">时间范围</span>
+          <div className="flex items-center rounded-lg border bg-card p-0.5">
+            {DASH_RANGES.map((r) => (
+              <button
+                key={r}
+                onClick={() => setRange(r)}
+                className={cn(
+                  "rounded-md px-2.5 py-1 text-xs transition-colors",
+                  range === r
+                    ? "bg-primary font-medium text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {TIME_RANGE_LABELS[r]}
+              </button>
+            ))}
+          </div>
+        </div>
         <Select
-          value={range}
-          onValueChange={(v) => setRange(v as TimeRange)}
+          value={channelFilter}
+          onValueChange={setChannelFilter}
         >
-          <SelectTrigger className="h-8 w-[110px] text-xs">
+          <SelectTrigger className="h-8 w-[130px] text-xs">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {(Object.keys(TIME_RANGE_LABELS) as TimeRange[]).map((r) => (
-              <SelectItem key={r} value={r}>
-                {TIME_RANGE_LABELS[r]}
+            <SelectItem value="all">全部渠道</SelectItem>
+            {(channels ?? []).map((c) => (
+              <SelectItem key={c.id} value={String(c.id)}>
+                {c.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={keyFilter} onValueChange={setKeyFilter}>
+          <SelectTrigger className="h-8 w-[130px] text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部密钥</SelectItem>
+            {(keys ?? []).map((k) => (
+              <SelectItem key={k.id} value={String(k.id)}>
+                {k.name}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
       </div>
 
-      {/* 汇总卡片:六张等宽,范围由上方筛选联动 */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
-        <StatCard title="请求数" value={stats ? String(stats.count) : "—"} />
+      {/* 汇总卡片:图标色块风,与筛选联动 */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
-          title="总费用"
+          icon={Link2}
+          tile="bg-[#8B7BE8]/15 text-[#8B7BE8]"
+          valueClass="text-[#6D5BD0] dark:text-[#A18FF0]"
+          label="请求数量"
+          value={stats ? String(stats.count) : "—"}
+          hint={`失败 ${stats?.errorCount ?? 0} 次`}
+        />
+        <StatCard
+          icon={CircleDollarSign}
+          tile="bg-[#D9A514]/15 text-[#D9A514]"
+          valueClass="text-[#A87E0B] dark:text-[#E0B33C]"
+          label="消耗金额"
           value={stats ? fmtYuan(stats.totalCost) : "—"}
+          hint="按定价表计,含缓存"
         />
         <StatCard
-          title="平均首字"
+          icon={Zap}
+          tile="bg-[#5FA8E8]/15 text-[#5FA8E8]"
+          valueClass="text-[#3E87C9] dark:text-[#7FBBF0]"
+          label="词元数量"
           value={
-            stats && stats.avgTtftMs != null ? fmtMs(stats.avgTtftMs) : "—"
-          }
-          hint="仅流式计入"
-        />
-        <StatCard
-          title="输出速度"
-          value={
-            stats && stats.avgSpeed != null
-              ? `${stats.avgSpeed.toFixed(1)} tok/s`
+            stats
+              ? fmtK(stats.promptTokens + stats.completionTokens)
               : "—"
           }
-          hint="仅流式计入"
+          hint={`缓存命中率 ${stats ? cacheHitRate(stats.cacheRead, stats.promptTokens) : "—"}`}
         />
         <StatCard
-          title="错误率"
-          value={errorRate}
-          hint={stats ? `${stats.errorCount} 次失败` : undefined}
-        />
-        <StatCard
-          title="熔断渠道"
-          value={String(openBreakers.length)}
-          hint={
-            openBreakers.length > 0 ? "请求将跳过这些渠道" : "全部正常"
-          }
+          icon={CircleCheck}
+          tile="bg-[#5BAF6E]/15 text-[#5BAF6E]"
+          valueClass="text-[#3F9354] dark:text-[#7CC48D]"
+          label="成功率"
+          value={successRate}
+          hint={`平均首字 ${stats?.avgTtftMs != null ? fmtMs(stats.avgTtftMs) : "—"}`}
         />
       </div>
 

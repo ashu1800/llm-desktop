@@ -338,29 +338,37 @@ pub struct StatsSummary {
     pub avg_ttft_ms: Option<f64>,
     pub avg_speed: Option<f64>,
     pub error_count: i64,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub cache_read: i64,
 }
 
-/// 汇总查询行:(总数, 总费用分, 平均首字, 平均速度, 错误数)
-type SummaryRow = (i64, i64, Option<f64>, Option<f64>, i64);
+/// 汇总查询行:(总数, 总费用分, 平均首字, 平均速度, 错误数, 输入词元, 输出词元, 缓存读)
+type SummaryRow = (i64, i64, Option<f64>, Option<f64>, i64, i64, i64, i64);
 
 pub async fn stats_summary(pool: &SqlitePool, f: &LogFilter) -> Result<StatsSummary, String> {
     let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
         "SELECT COUNT(*), COALESCE(SUM(cost),0), AVG(ttft_ms), AVG(speed),
-             COALESCE(SUM(status NOT BETWEEN 200 AND 299 OR error IS NOT NULL),0)
+             COALESCE(SUM(status NOT BETWEEN 200 AND 299 OR error IS NOT NULL),0),
+             COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
+             COALESCE(SUM(cache_read),0)
          FROM request_logs",
     );
     push_filters(&mut qb, f);
-    let (count, total_cost, avg_ttft, avg_speed, error_count): SummaryRow = qb
-        .build_query_as()
-        .fetch_one(pool)
-        .await
-        .map_err(|e| format!("统计汇总失败: {e}"))?;
+    let (count, total_cost, avg_ttft, avg_speed, error_count, prompt, completion, cache_read): SummaryRow =
+        qb.build_query_as()
+            .fetch_one(pool)
+            .await
+            .map_err(|e| format!("统计汇总失败: {e}"))?;
     Ok(StatsSummary {
         count,
         total_cost,
         avg_ttft_ms: avg_ttft,
         avg_speed,
         error_count,
+        prompt_tokens: prompt,
+        completion_tokens: completion,
+        cache_read: cache_read,
     })
 }
 

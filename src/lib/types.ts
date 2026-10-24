@@ -179,6 +179,9 @@ export interface StatsSummary {
   avgTtftMs: number | null;
   avgSpeed: number | null;
   errorCount: number;
+  promptTokens: number;
+  completionTokens: number;
+  cacheRead: number;
 }
 
 /** 后端元组序列化为 JSON 数组 */

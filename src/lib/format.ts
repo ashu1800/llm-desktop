@@ -62,7 +62,7 @@ export function parseAttempts(attemptsJson: string): unknown[] {
   }
 }
 
-export type TimeRange = "today" | "7d" | "30d" | "all";
+export type TimeRange = "today" | "3d" | "7d" | "30d" | "all";
 
 /** 时间范围 → fromTs(全部返回 null) */
 export function rangeFromTs(range: TimeRange): number | null {
@@ -72,6 +72,8 @@ export function rangeFromTs(range: TimeRange): number | null {
       const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       return d.getTime();
     }
+    case "3d":
+      return now.getTime() - 3 * 86_400_000;
     case "7d":
       return now.getTime() - 7 * 86_400_000;
     case "30d":
@@ -83,6 +85,7 @@ export function rangeFromTs(range: TimeRange): number | null {
 
 export const TIME_RANGE_LABELS: Record<TimeRange, string> = {
   today: "今天",
+  "3d": "近 3 天",
   "7d": "近 7 天",
   "30d": "近 30 天",
   all: "全部",
