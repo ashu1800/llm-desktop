@@ -127,7 +127,8 @@ pub fn parse_request(v: &Value) -> Result<CanonicalRequest, String> {
     match obj.get("thinking") {
         Some(t) if t.get("type").and_then(Value::as_str) == Some("enabled") => {
             if let Some(b) = t.get("budget_tokens").and_then(Value::as_u64) {
-                ir.reasoning = Some(Reasoning::Budget(b as u32));
+                // u64→u32 饱和转换:超大值(恶意/异常客户端)钳到 u32::MAX 而非静默回绕
+                ir.reasoning = Some(Reasoning::Budget(u32::try_from(b).unwrap_or(u32::MAX)));
             }
         }
         _ => {}
@@ -386,9 +387,23 @@ pub fn render_request(ir: &CanonicalRequest) -> (Value, Vec<String>) {
         );
     }
 
+    // budget_tokens 必须 < max_tokens 且 ≥1024:effort 映射的固定预算(如 high=16384)
+    // 可能超过客户端的 max_tokens,超限 Anthropic 直接 400。钳到 max_tokens 的一半
+    // (至少 1024),保证合法;thinking 关闭时同样处理
+    let clamped_budget = |b: u32| -> u32 {
+        let max_t = ir.max_tokens.unwrap_or(i64::MAX) as u32;
+        if b < max_t {
+            b
+        } else {
+            (max_t / 2).max(1024)
+        }
+    };
     match ir.reasoning {
         Some(Reasoning::Budget(b)) => {
-            obj.insert("thinking".into(), json!({"type": "enabled", "budget_tokens": b}));
+            obj.insert(
+                "thinking".into(),
+                json!({"type": "enabled", "budget_tokens": clamped_budget(b)}),
+            );
             // Anthropic thinking 模式要求 temperature=1 且不能带 top_p
             if ir.temperature.is_some() {
                 push_drop(&mut dropped, "temperature(thinking)");
@@ -405,7 +420,7 @@ pub fn render_request(ir: &CanonicalRequest) -> (Value, Vec<String>) {
             {
                 obj.insert(
                     "thinking".into(),
-                    json!({"type": "enabled", "budget_tokens": budget}),
+                    json!({"type": "enabled", "budget_tokens": clamped_budget(*budget)}),
                 );
                 if ir.temperature.is_some() {
                     push_drop(&mut dropped, "temperature(thinking)");
@@ -462,18 +477,25 @@ pub enum UpstreamBody {
     Err(String),
 }
 
+/// Anthropic usage 归一化:input_tokens **不含** cache_read/cache_write(三者互斥),
+/// 而 Usage.prompt 全协议统一为"含缓存的总输入"语义(OpenAI prompt_tokens、
+/// Gemini promptTokenCount 均如此),计费公式按总量扣缓存。若不归一化,
+/// 非缓存输入会被公式二次扣减而免计,费用系统性偏低。
 pub fn parse_usage(u: &Value) -> Usage {
+    let input = u.get("input_tokens").and_then(Value::as_i64).unwrap_or(0);
+    let cache_read = u
+        .get("cache_read_input_tokens")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let cache_write = u
+        .get("cache_creation_input_tokens")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
     Usage {
-        prompt: u.get("input_tokens").and_then(Value::as_i64).unwrap_or(0),
+        prompt: input + cache_read + cache_write,
         completion: u.get("output_tokens").and_then(Value::as_i64).unwrap_or(0),
-        cache_read: u
-            .get("cache_read_input_tokens")
-            .and_then(Value::as_i64)
-            .unwrap_or(0),
-        cache_write: u
-            .get("cache_creation_input_tokens")
-            .and_then(Value::as_i64)
-            .unwrap_or(0),
+        cache_read,
+        cache_write,
     }
 }
 
@@ -580,8 +602,10 @@ pub fn render_response_json(
         "content": content,
         "stop_reason": stop.map(render_finish),
         "stop_sequence": Value::Null,
+        // Usage.prompt 为"含缓存总输入"(内部统一口径);Anthropic 协议要求
+        // input_tokens 不含缓存项(三者互斥),出站需反向拆分
         "usage": {
-            "input_tokens": usage.prompt,
+            "input_tokens": (usage.prompt - usage.cache_read - usage.cache_write).max(0),
             "output_tokens": usage.completion,
             "cache_read_input_tokens": usage.cache_read,
             "cache_creation_input_tokens": usage.cache_write,
@@ -740,6 +764,9 @@ pub struct EntrySse {
     started: bool,
     open_block: Option<(usize, &'static str)>,
     index_of: std::collections::HashMap<usize, usize>,
+    /// 每个 block 的 content_block_start 载荷:并行工具调用 delta 交错到达时,
+    /// 关闭当前块重开另一块需要真实 id/name——不能发空载荷产出非法 tool_use
+    start_payloads: std::collections::HashMap<usize, Value>,
     next_index: usize,
     finished: bool,
 }
@@ -752,6 +779,7 @@ impl EntrySse {
             started: false,
             open_block: None,
             index_of: Default::default(),
+            start_payloads: Default::default(),
             next_index: 0,
             finished: false,
         }
@@ -808,6 +836,8 @@ impl EntrySse {
         out: &mut Vec<String>,
     ) -> usize {
         let idx = self.out_index(block);
+        // 记录/更新该块的 start 载荷(ToolStart 首次带真实 id/name,后续重开取用)
+        self.start_payloads.insert(block, start_payload.clone());
         if self.open_block != Some((idx, ty)) {
             self.close_open(out);
             out.push(event_line(
@@ -882,12 +912,14 @@ impl EntrySse {
                 );
             }
             StreamEvent::ToolDelta { block, json } => {
-                let idx = self.open_block_of(
-                    *block,
-                    "tool_use",
-                    json!({"type": "tool_use", "id": "", "name": "", "input": {}}),
-                    out,
-                );
+                // 交错场景:该块此前已 start 过,用缓存的原始载荷重开(含真实 id/name),
+                // 绝不发空 id/name 的非法 tool_use
+                let payload = self
+                    .start_payloads
+                    .get(block)
+                    .cloned()
+                    .unwrap_or_else(|| json!({"type": "tool_use", "id": "", "name": "", "input": {}}));
+                let idx = self.open_block_of(*block, "tool_use", payload, out);
                 out.push(event_line(
                     "content_block_delta",
                     &json!({
@@ -981,6 +1013,8 @@ mod tests {
 
     #[test]
     fn effort_maps_to_thinking_budget() {
+        // effort=high 映射 16384,但 max_tokens=4096:钳位到 max_tokens/2=2048,
+        // 否则 budget >= max_tokens 被 Anthropic 拒绝(400)
         let ir = CanonicalRequest {
             model: "claude".into(),
             max_tokens: Some(4096),
@@ -988,8 +1022,18 @@ mod tests {
             ..Default::default()
         };
         let (rendered, _) = render_request(&ir);
-        assert_eq!(rendered["thinking"]["budget_tokens"], 16384);
+        assert_eq!(rendered["thinking"]["budget_tokens"], 2048);
         assert_eq!(rendered["max_tokens"], 4096);
+
+        // max_tokens 足够大时保持原预算
+        let ir = CanonicalRequest {
+            model: "claude".into(),
+            max_tokens: Some(32768),
+            reasoning: Some(Reasoning::Effort(super::super::ir::Effort::High)),
+            ..Default::default()
+        };
+        let (rendered, _) = render_request(&ir);
+        assert_eq!(rendered["thinking"]["budget_tokens"], 16384);
     }
 
     #[test]
@@ -1014,7 +1058,8 @@ mod tests {
             StreamEvent::Finish { stop_reason, usage } => {
                 assert_eq!(*stop_reason, Some(StopReason::ToolUse));
                 let u = usage.unwrap();
-                assert_eq!(u.prompt, 10);
+                // 归一化语义:prompt = input(10) + cache_read(4) = 14(含缓存总输入)
+                assert_eq!(u.prompt, 14);
                 assert_eq!(u.cache_read, 4);
                 assert_eq!(u.completion, 7);
             }

@@ -5,7 +5,7 @@ use crate::store::api_keys::{self, ApiKey};
 
 #[tauri::command]
 pub async fn list_api_keys(state: State<'_, AppState>) -> Result<Vec<ApiKey>, String> {
-    Ok(state.keys.read().unwrap().clone())
+    Ok(crate::util::read_ok(&state.keys).clone())
 }
 
 /// 创建密钥:生成 sk-gw- + 32 位 hex,明文仅创建时返回一次

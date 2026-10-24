@@ -65,24 +65,24 @@ impl AppState {
     }
 
     pub fn current_settings(&self) -> AppSettings {
-        self.settings.read().unwrap().clone()
+        crate::util::read_ok(&self.settings).clone()
     }
 
     pub async fn reload_channels(&self) -> Result<(), String> {
         let v = crate::store::channels::list(&self.db).await?;
-        *self.channels.write().unwrap() = v;
+        *crate::util::write_ok(&self.channels) = v;
         Ok(())
     }
 
     pub async fn reload_keys(&self) -> Result<(), String> {
         let v = crate::store::api_keys::list(&self.db).await?;
-        *self.keys.write().unwrap() = v;
+        *crate::util::write_ok(&self.keys) = v;
         Ok(())
     }
 
     pub async fn reload_prices(&self) -> Result<(), String> {
         let rows = crate::store::prices::list(&self.db).await?;
-        *self.prices.write().unwrap() = PriceTable { rows };
+        *crate::util::write_ok(&self.prices) = PriceTable { rows };
         Ok(())
     }
 }

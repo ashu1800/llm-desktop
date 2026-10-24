@@ -44,7 +44,7 @@ async fn build_export(state: &AppState) -> Result<String, String> {
         settings: state.current_settings(),
         channels: store::channels::list(&state.db).await?,
         keys: store::api_keys::list(&state.db).await?,
-        prices: state.prices.read().unwrap().rows.clone(),
+        prices: crate::util::read_ok(&state.prices).rows.clone(),
     };
     serde_json::to_string_pretty(&cfg).map_err(|e| format!("序列化配置失败: {e}"))
 }
@@ -125,6 +125,18 @@ pub async fn import_config_apply(
         std::fs::read_to_string(&path).map_err(|e| format!("读取文件失败: {e}"))?;
     let cfg = parse_config(&text)?;
 
+    // 可失败的纯校验全部前置:端口/地址不合法时在动库之前就拒绝,
+    // 避免"DB 已换新、监听切不过去"的半提交状态
+    let new_settings = cfg.settings.normalized();
+    let old = state.current_settings();
+    let addr_changed =
+        old.port != new_settings.port || old.listen_addr != new_settings.listen_addr;
+    let target = if addr_changed {
+        Some(manager::parse_listen(&new_settings.listen_addr, new_settings.port)?)
+    } else {
+        None
+    };
+
     // 整表替换在单个事务内完成,失败即整体回滚
     let mut tx = state
         .db
@@ -169,26 +181,28 @@ pub async fn import_config_apply(
         .await
         .map_err(|e| format!("提交导入事务失败: {e}"))?;
 
-    // 设置覆盖 + 热生效(与 update_settings 一致:监听变更平滑切换、自启同步注册表)
-    let new_settings = cfg.settings.normalized();
-    let old = state.current_settings();
-    let addr_changed =
-        old.port != new_settings.port || old.listen_addr != new_settings.listen_addr;
-    if addr_changed {
-        let target = manager::parse_listen(&new_settings.listen_addr, new_settings.port)?;
-        manager::apply_listen_change(&state, target).await?;
-    }
-    if old.autostart != new_settings.autostart {
-        autostart::set_enabled(&app, new_settings.autostart)?;
-    }
-    store::settings::save(&state.db, &new_settings).await?;
-    *state.settings.write().unwrap() = new_settings;
+    // 事务已提交:缓存 reload 与状态清理必须执行(几乎不会失败),
+    // 否则数据面继续用旧渠道/旧定价运行且熔断表挂着已重排的渠道 id
     state.reload_channels().await?;
     state.reload_keys().await?;
     state.reload_prices().await?;
-    // 渠道 id 全部重排:清空按旧 id 记账的熔断状态与密钥轮询起点
     state.breakers.clear_all();
-    state.key_counters.lock().unwrap().clear();
+    crate::util::lock_ok(&state.key_counters).clear();
+
+    // 设置落盘与缓存同步,随后外部副作用 best-effort:失败仅告警不回滚导入
+    store::settings::save(&state.db, &new_settings).await?;
+    *crate::util::write_ok(&state.settings) = new_settings.clone();
+
+    if let Some(target) = target {
+        if let Err(e) = manager::apply_listen_change(&state, target).await {
+            log::warn!("导入后监听切换失败(配置已保存): {e}");
+        }
+    }
+    if old.autostart != new_settings.autostart {
+        if let Err(e) = autostart::set_enabled(&app, new_settings.autostart) {
+            log::warn!("导入后同步开机自启失败: {e}");
+        }
+    }
 
     events::emit(&app, GatewayEvent::SettingsChanged);
     tray::refresh(&app);

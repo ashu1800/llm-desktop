@@ -22,9 +22,11 @@ pub struct ServerHandle {
 
 impl ServerHandle {
     pub async fn stop(self) {
-        // 发送关闭信号;即便发送失败(接收端已退出)也等待任务收尾
+        // 发送关闭信号;即便发送失败(接收端已退出)也等待任务收尾。
+        // 宽限 15s:graceful shutdown 会等全部 in-flight 请求完成,一个挂起的
+        // 慢流(或极端情况下失联客户端)不应让停止/端口切换永久卡死 listen_lock
         let _ = self.shutdown_tx.send(true);
-        let _ = self.join.await;
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(15), self.join).await;
     }
 }
 

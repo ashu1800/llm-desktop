@@ -117,6 +117,9 @@ pub fn start_relay(
     on_done: Box<dyn FnOnce(StreamOutcome) + Send>,
 ) -> Body {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(64);
+    // 中继任务只持 Weak 引用:客户端"连着但不读"时强引用发送会无限挂起,
+    // 拖死 idle 超时并滞留上游连接;Weak 在 Body 被丢弃(axum 侧取消)后 upgrade 失败即退出
+    let wtx = tx.downgrade();
     tauri::async_runtime::spawn(async move {
         let mut bstream = bstream;
         let mut parser = SseParser::default();
@@ -148,7 +151,7 @@ pub fn start_relay(
                 last_activity = tokio::time::Instant::now();
                 let chunk: Chunk = $chunk;
                 if passthrough {
-                    if tx.send(Ok(chunk.clone())).await.is_err() {
+                    if send_chunk(&wtx, chunk.clone()).await.is_err() {
                         error = Some("客户端已断开".into());
                         return finish(
                             entry,
@@ -188,7 +191,8 @@ pub fn start_relay(
                         renderer.render(&ev, &mut rendered);
                         for s in rendered.drain(..) {
                             let bytes: Chunk = s.into_bytes().into();
-                            if tx.send(Ok(bytes)).await.is_err() {
+                            if send_chunk(&wtx, bytes).await.is_err() {
+                                // 客户端已断开/失联:立即停止拉取上游,避免替离线用户继续消耗计费 token
                                 error = Some("客户端已断开".into());
                                 break;
                             }
@@ -235,7 +239,7 @@ pub fn start_relay(
                     break;
                 }
                 _ = keepalive.tick(), if !passthrough => {
-                    if tx.send(Ok(keepalive_line().into_bytes().into())).await.is_err() {
+                    if send_chunk(&wtx, keepalive_line().into_bytes().into()).await.is_err() {
                         error = Some("客户端已断开".into());
                         break;
                     }
@@ -298,6 +302,22 @@ async fn finish(
         tool_calls,
         error,
     });
+}
+
+/// 经 WeakSender 发送:① Body 被丢弃(客户端正常断开)→ upgrade 失败立即返回;
+/// ② 客户端"连着但不读"→ 30s 超时判失联,防止 send 永久挂起拖死 idle 超时
+/// 并滞留上游连接(慢/坏客户端防护)。
+async fn send_chunk(
+    wtx: &tokio::sync::mpsc::WeakSender<Result<axum::body::Bytes, std::io::Error>>,
+    chunk: Chunk,
+) -> Result<(), ()> {
+    let Some(tx) = wtx.upgrade() else {
+        return Err(());
+    };
+    match tokio::time::timeout(Duration::from_secs(30), tx.send(Ok(chunk))).await {
+        Ok(res) => res.map_err(|_| ()),
+        Err(_) => Err(()),
+    }
 }
 
 /// 按入口协议构造流内错误事件(上游中断/空闲超时时补发,客户端可立即失败)

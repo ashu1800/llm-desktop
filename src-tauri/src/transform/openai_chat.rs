@@ -613,8 +613,9 @@ pub fn render_finish(sr: StopReason) -> &'static str {
     match sr {
         StopReason::MaxTokens => "length",
         StopReason::ToolUse => "tool_calls",
-        StopReason::StopSequence => "stop_sequence",
-        StopReason::EndTurn | StopReason::Other => "stop",
+        // OpenAI 合法枚举只有 stop/length/tool_calls/function/content_filter;
+        // "stop_sequence" 是 Anthropic 的值,严格 SDK 会反序列化失败
+        StopReason::StopSequence | StopReason::EndTurn | StopReason::Other => "stop",
     }
 }
 

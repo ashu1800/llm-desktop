@@ -28,6 +28,21 @@ pub fn ct_eq(a: &str, b: &str) -> bool {
     diff == 0
 }
 
+/// 锁中毒容忍:std 锁一旦中毒(持锁线程 panic 过),后续 lock() 全部 Err,
+/// 网关热路径若 unwrap 会从单点 panic 放大为全瘫。这些锁保护的是可重建的
+/// 缓存/计数状态,继承中毒前的值是安全的,统一经此获取。
+pub fn lock_ok<T>(lock: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+pub fn read_ok<T>(lock: &std::sync::RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
+    lock.read().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+pub fn write_ok<T>(lock: &std::sync::RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
+    lock.write().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// 按 UTF-8 字符边界截断,超长时追加省略标记(日志快照 32KB 上限用)
 pub fn truncate_utf8(s: &str, max: usize) -> String {
     if s.len() <= max {
@@ -106,14 +121,24 @@ pub fn ua_to_client(ua: &str) -> String {
     name.to_string()
 }
 
-/// Base URL 拼接:兼容 base 以 "/" 或 "/v1" 结尾的中转站写法
-/// suffix 传入带版本前缀的完整路径,如 "/v1/chat/completions"
+/// Base URL 拼接:兼容 base 以 "/" 或带版本前缀("/v1"、"/v1beta" 等)结尾的中转站写法
+/// suffix 传入带版本前缀的完整路径,如 "/v1/chat/completions" 或 "/v1beta/models"
 pub fn join_base(base: &str, suffix: &str) -> String {
     let mut b = base.trim().trim_end_matches('/').to_string();
     let first_seg = suffix.trim_start_matches('/');
-    // base 已含 "/v1" 且 suffix 以 "/v1/..." 开头时避免出现 /v1/v1
-    if b.ends_with("/v1") && first_seg.starts_with("v1/") {
-        b.push_str(&suffix[3..]);
+    let suffix_first = first_seg.split('/').next().unwrap_or("");
+    // base 末段与 suffix 首段为同一版本前缀时避免重复(/v1/v1、/v1beta/v1beta);
+    // 版本段形如 v<数字> 开头(v1/v1beta),避免误伤普通路径段
+    let is_version_seg = |s: &str| {
+        s.len() >= 2
+            && s.starts_with('v')
+            && s[1..].chars().next().is_some_and(|c| c.is_ascii_digit())
+    };
+    let base_last = b.rsplit('/').next().unwrap_or("");
+    if base_last.eq_ignore_ascii_case(suffix_first) && is_version_seg(suffix_first) {
+        // 去掉 suffix 的版本段,复用 base 已带的前缀
+        let rest = &first_seg[suffix_first.len()..]; // "/chat/completions" 或 ""
+        b.push_str(rest);
     } else {
         b.push('/');
         b.push_str(first_seg);
@@ -157,6 +182,16 @@ mod tests {
         assert_eq!(
             join_base("https://api.anthropic.com", "/v1/messages"),
             "https://api.anthropic.com/v1/messages"
+        );
+        // Gemini 渠道 base 以 /v1beta 结尾同样去重
+        assert_eq!(
+            join_base("https://relay.example.com/v1beta", "/v1beta/models"),
+            "https://relay.example.com/v1beta/models"
+        );
+        // 非版本段(如 /v2web)不去重
+        assert_eq!(
+            join_base("https://relay.example.com/v1beta", "/v1/chat/completions"),
+            "https://relay.example.com/v1beta/v1/chat/completions"
         );
     }
 

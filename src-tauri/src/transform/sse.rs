@@ -13,6 +13,10 @@ pub struct SseParser {
     cur_data: String,
 }
 
+/// 单事件缓冲上限:异常上游返回非 SSE 大响应(如配置错误的渠道回 HTML 页)
+/// 且无换行时,防止缓冲无界增长
+const BUF_LIMIT: usize = 1024 * 1024;
+
 impl SseParser {
     pub fn feed(&mut self, bytes: &[u8], out: &mut Vec<SseEvent>) {
         self.buf.extend_from_slice(bytes);
@@ -28,6 +32,10 @@ impl SseParser {
             pos = line_end + 1;
         }
         self.buf.drain(..pos);
+        // 超限防御:正常 SSE 行远小于此;触达即认为上游行为异常,丢弃积压
+        if self.buf.len() > BUF_LIMIT {
+            self.buf.clear();
+        }
     }
 
     fn handle_line(line: &[u8], cur_event: &mut String, cur_data: &mut String, out: &mut Vec<SseEvent>) {

@@ -149,6 +149,9 @@ pub async fn clear_all(pool: &SqlitePool) -> Result<(), String> {
 /// 待回填行:(id, 入口模型, 映射模型, prompt, completion, cache_read, cache_write)
 type BackfillRow = (i64, String, Option<String>, i64, i64, i64, i64);
 
+/// 单事务批量行数:逐行 autocommit 每条一次 fsync,大回填极慢
+const BACKFILL_BATCH: usize = 500;
+
 pub async fn backfill_costs(
     pool: &SqlitePool,
     prices: &crate::billing::pricing::PriceTable,
@@ -161,27 +164,39 @@ pub async fn backfill_costs(
     .await
     .map_err(|e| format!("读取待回填日志失败: {e}"))?;
     let mut updated = 0u64;
-    for (id, model, mapped, prompt, completion, cache_read, cache_write) in rows {
-        let price = prices
-            .match_for(&model)
-            .or_else(|| mapped.as_deref().and_then(|m| prices.match_for(m)));
-        let Some(p) = price else {
-            continue;
-        };
-        let usage = crate::billing::Usage {
-            prompt: prompt.max(0),
-            completion: completion.max(0),
-            cache_read: cache_read.max(0),
-            cache_write: cache_write.max(0),
-        };
-        let cost = crate::billing::compute_cost(p, &usage);
-        let r = sqlx::query("UPDATE request_logs SET cost=? WHERE id=? AND cost IS NULL")
-            .bind(cost)
-            .bind(id)
-            .execute(pool)
+    for chunk in rows.chunks(BACKFILL_BATCH) {
+        let mut tx = pool
+            .begin()
             .await
-            .map_err(|e| format!("回填费用失败: {e}"))?;
-        updated += r.rows_affected();
+            .map_err(|e| format!("开启回填事务失败: {e}"))?;
+        for (id, model, mapped, prompt, completion, cache_read, cache_write) in chunk {
+            let (id, model, mapped) = (*id, model.clone(), mapped.clone());
+            let (prompt, completion, cache_read, cache_write) =
+                (*prompt, *completion, *cache_read, *cache_write);
+            let price = prices
+                .match_for(&model)
+                .or_else(|| mapped.as_deref().and_then(|m| prices.match_for(m)));
+            let Some(p) = price else {
+                continue; // 无定价行保持 NULL,不占用回填
+            };
+            let usage = crate::billing::Usage {
+                prompt: prompt.max(0),
+                completion: completion.max(0),
+                cache_read: cache_read.max(0),
+                cache_write: cache_write.max(0),
+            };
+            let cost = crate::billing::compute_cost(p, &usage);
+            let r = sqlx::query("UPDATE request_logs SET cost=? WHERE id=? AND cost IS NULL")
+                .bind(cost)
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| format!("回填费用失败: {e}"))?;
+            updated += r.rows_affected();
+        }
+        tx.commit()
+            .await
+            .map_err(|e| format!("提交回填事务失败: {e}"))?;
     }
     Ok(updated)
 }
@@ -335,7 +350,7 @@ pub async fn get_request_log(pool: &SqlitePool, id: i64) -> Result<Option<LogDet
 #[serde(rename_all = "camelCase")]
 pub struct StatsSummary {
     pub count: i64,
-    /// 人民币分
+    /// 人民币微元(1e-6 元;0003 迁移起 cost 全表为微元口径)
     pub total_cost: i64,
     pub avg_ttft_ms: Option<f64>,
     pub avg_speed: Option<f64>,
@@ -372,6 +387,22 @@ pub async fn stats_summary(pool: &SqlitePool, f: &LogFilter) -> Result<StatsSumm
         completion_tokens: completion,
         cache_read,
     })
+}
+
+/// 历史日志中出现过的全部客户端名(去重,识别时间倒序):客户端映射页选项来源
+pub async fn list_clients(pool: &SqlitePool) -> Result<Vec<String>, String> {
+    // 空值过滤下推 SQL,避免大表全行传输后再过滤;
+    // 排序子查询取 MAX(id),外层只取 client 列以匹配元组类型
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT client FROM request_logs
+         WHERE client IS NOT NULL AND client != ''
+         GROUP BY client
+         ORDER BY MAX(id) DESC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("查询客户端列表失败: {e}"))?;
+    Ok(rows.into_iter().map(|(c,)| c).collect())
 }
 
 #[cfg(test)]

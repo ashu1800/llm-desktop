@@ -77,8 +77,16 @@ struct ChannelRow {
     updated_at: i64,
 }
 
-fn parse_json<T: serde::de::DeserializeOwned>(s: &str, default: T) -> T {
-    serde_json::from_str(s).unwrap_or(default)
+/// JSON 字段解析:损坏时回退默认值但必须告警——渠道密钥池静默清空会让
+/// 渠道变成"未配置上游密钥"而失效,用户需知道数据已损坏
+fn parse_json<T: serde::de::DeserializeOwned>(field: &str, s: &str, default: T) -> T {
+    match serde_json::from_str(s) {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!("渠道字段 {field} JSON 损坏,已回退为默认值: {e}");
+            default
+        }
+    }
 }
 
 impl ChannelRow {
@@ -93,11 +101,11 @@ impl ChannelRow {
             name: self.name,
             protocol,
             base_url: self.base_url,
-            api_keys: parse_json(&self.api_keys, Vec::new()),
+            api_keys: parse_json("api_keys", &self.api_keys, Vec::new()),
             enabled: self.enabled,
             proxy: self.proxy,
-            models: parse_json(&self.models, Vec::new()),
-            model_map: parse_json(&self.model_map, Default::default()),
+            models: parse_json("models", &self.models, Vec::new()),
+            model_map: parse_json("model_map", &self.model_map, Default::default()),
             timeout_override: self
                 .timeout_override
                 .and_then(|s| serde_json::from_str(&s).ok()),

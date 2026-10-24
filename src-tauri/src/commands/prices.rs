@@ -7,7 +7,7 @@ use crate::store::{logs, prices};
 
 #[tauri::command]
 pub async fn list_model_prices(state: State<'_, AppState>) -> Result<Vec<PriceEntry>, String> {
-    Ok(state.prices.read().unwrap().rows.clone())
+    Ok(crate::util::read_ok(&state.prices).rows.clone())
 }
 
 #[tauri::command]
@@ -59,7 +59,7 @@ pub async fn dismiss_unpriced_model(
 /// 对 cost 为空的历史日志按当前定价表回填费用,返回回填条数
 #[tauri::command]
 pub async fn backfill_costs(state: State<'_, AppState>) -> Result<u64, String> {
-    let table = state.prices.read().unwrap().clone();
+    let table = crate::util::read_ok(&state.prices).clone();
     logs::backfill_costs(&state.db, &table).await
 }
 
@@ -74,7 +74,7 @@ pub async fn quick_price_and_backfill(
     }
     prices::upsert(&state.db, &price).await?;
     state.reload_prices().await?;
-    let table = state.prices.read().unwrap().clone();
+    let table = crate::util::read_ok(&state.prices).clone();
     let n = logs::backfill_costs(&state.db, &table).await?;
     prices::clear_unpriced_matching(&state.db, price.pattern.trim()).await?;
     Ok(n)

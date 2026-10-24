@@ -14,6 +14,7 @@ use crate::transform::sse::data_line;
 // previous_response_id 进程内 LRU(容量 500,重启清空 → 400 提示携带完整 input)
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 pub struct StoredResponse {
     /// 本次请求的完整输入消息(含此前拼接)
     pub context: Vec<Message>,
@@ -37,27 +38,50 @@ impl Default for ResponseStore {
 }
 
 impl ResponseStore {
+    /// 标准 LRU 读取:不删除条目(同 previous_response_id 可多次引用、失败可重试),
+    /// 仅把命中项移到队尾刷新新鲜度
     pub fn get(&self, id: &str) -> Option<StoredResponse> {
-        let mut g = self.inner.lock().unwrap();
+        let mut g = crate::util::lock_ok(&self.inner);
         let (map, order) = &mut *g;
-        let stored = map.remove(id)?;
-        if let Some(pos) = order.iter().position(|x| x == id) {
-            order.remove(pos);
+        if !map.contains_key(id) {
+            return None;
         }
-        order.push_back(id.to_string());
-        Some(stored)
+        if let Some(pos) = order.iter().position(|x| x == id) {
+            if let Some(id_owned) = order.remove(pos) {
+                order.push_back(id_owned);
+            }
+        }
+        map.get(id).cloned()
     }
 
     pub fn put(&self, id: &str, stored: StoredResponse) {
-        let mut g = self.inner.lock().unwrap();
+        let mut g = crate::util::lock_ok(&self.inner);
         let (map, order) = &mut *g;
         if map.insert(id.to_string(), stored).is_none() {
             order.push_back(id.to_string());
         }
         const CAP: usize = 500;
-        while order.len() > CAP {
-            if let Some(old) = order.pop_front() {
-                map.remove(&old);
+        // 字节上限:每条存完整对话上下文(可达数 MB),仅限条数极端情况内存可到 GB 级
+        const MAX_BYTES: usize = 256 * 1024 * 1024;
+        let est_bytes = |s: &StoredResponse, id: &str| -> usize {
+            let blocks: usize = s.output_blocks.iter().map(|b| b.text_len()).sum();
+            let ctx: usize = s
+                .context
+                .iter()
+                .map(|m| m.blocks.iter().map(|b| b.text_len()).sum::<usize>())
+                .sum();
+            blocks + ctx + id.len()
+        };
+        let mut total: usize = map
+            .iter()
+            .map(|(k, v)| est_bytes(v, k))
+            .sum();
+        while order.len() > CAP || total > MAX_BYTES {
+            let Some(old) = order.pop_front() else {
+                break;
+            };
+            if let Some(removed) = map.remove(&old) {
+                total = total.saturating_sub(est_bytes(&removed, &old));
             }
         }
     }

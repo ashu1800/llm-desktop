@@ -14,7 +14,7 @@ pub struct TestChannelResult {
 
 #[tauri::command]
 pub async fn list_channels(state: State<'_, AppState>) -> Result<Vec<Channel>, String> {
-    Ok(state.channels.read().unwrap().clone())
+    Ok(crate::util::read_ok(&state.channels).clone())
 }
 
 #[tauri::command]
@@ -135,7 +135,7 @@ fn count_models(body: &str, proto: crate::proto::UpstreamProto) -> usize {
 
 fn test_client(state: &State<'_, AppState>, ch: &Channel) -> Result<reqwest::Client, String> {
     let cache_key = format!("{}|test", ch.proxy.clone().unwrap_or_default());
-    if let Some(c) = state.http.lock().unwrap().get(&cache_key) {
+    if let Some(c) = crate::util::lock_ok(&state.http).get(&cache_key) {
         return Ok(c.clone());
     }
     let mut builder = reqwest::Client::builder()
@@ -148,6 +148,6 @@ fn test_client(state: &State<'_, AppState>, ch: &Channel) -> Result<reqwest::Cli
         Some(url) => builder.proxy(reqwest::Proxy::all(url).map_err(|e| e.to_string())?),
     };
     let c = builder.build().map_err(|e| e.to_string())?;
-    state.http.lock().unwrap().insert(cache_key, c.clone());
+    crate::util::lock_ok(&state.http).insert(cache_key, c.clone());
     Ok(c)
 }

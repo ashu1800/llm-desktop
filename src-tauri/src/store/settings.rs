@@ -11,9 +11,15 @@ pub async fn load(pool: &SqlitePool) -> Result<AppSettings, String> {
         .await
         .map_err(|e| format!("读取设置失败: {e}"))?;
     match row {
-        Some((v,)) => serde_json::from_str::<AppSettings>(&v)
-            .map(|s| s.normalized())
-            .map_err(|e| format!("设置解析失败: {e}")),
+        Some((v,)) => match serde_json::from_str::<AppSettings>(&v) {
+            Ok(s) => Ok(s.normalized()),
+            // 损坏/类型不兼容:降级默认值继续启动,不让一个 JSON 文件砖死应用。
+            // 原值留日志便于恢复;下次保存自动覆盖为合法值
+            Err(e) => {
+                log::warn!("设置 JSON 解析失败,使用默认设置(原值: {v}): {e}");
+                Ok(AppSettings::default())
+            }
+        },
         None => Ok(AppSettings::default()),
     }
 }

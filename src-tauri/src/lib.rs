@@ -132,6 +132,7 @@ pub fn run() {
             commands::logs::get_request_log,
             commands::logs::get_stats,
             commands::logs::clear_logs,
+            commands::logs::list_clients,
             commands::config::export_config,
             commands::config::import_config_preview,
             commands::config::import_config_apply,
@@ -174,9 +175,9 @@ async fn init_state(handle: &tauri::AppHandle) -> Result<AppState, Box<dyn std::
     log::info!(
         "状态初始化完成: db={}, channels={}, keys={}, prices={}",
         data_dir.join("gateway.db").display(),
-        state.channels.read().unwrap().len(),
-        state.keys.read().unwrap().len(),
-        state.prices.read().unwrap().rows.len(),
+        util::read_ok(&state.channels).len(),
+        util::read_ok(&state.keys).len(),
+        util::read_ok(&state.prices).rows.len(),
     );
     Ok(state)
 }

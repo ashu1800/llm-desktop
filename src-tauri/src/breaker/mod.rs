@@ -59,6 +59,9 @@ struct ChannelBreaker {
     open_until: Instant,
     current_cooldown: Duration,
     half_open_inflight: bool,
+    /// 本轮探测的发放时刻:探测路径异常未记账时,超过该时限允许新探测,
+    /// 避免名额永久泄漏封锁渠道
+    half_open_granted_at: Option<Instant>,
 }
 
 impl Default for ChannelBreaker {
@@ -76,7 +79,15 @@ impl ChannelBreaker {
             open_until: Instant::now(),
             current_cooldown: Duration::ZERO,
             half_open_inflight: false,
+            half_open_granted_at: None,
         }
+    }
+
+    /// 探测名额超时:大于首字+空闲超时的常见上限,超时视为探测失败路径异常
+    const HALF_OPEN_GRANT_TIMEOUT: Duration = Duration::from_secs(300);
+
+    fn probe_expired(&self) -> bool {
+        matches!(self.half_open_granted_at, Some(t) if t.elapsed() >= Self::HALF_OPEN_GRANT_TIMEOUT)
     }
 
     fn prune_window(&mut self, window: Duration) {
@@ -107,7 +118,7 @@ pub struct BreakerTable {
 impl BreakerTable {
     /// 是否放行请求;Open 到期自动转 HalfOpen 并放行 1 个探测
     pub fn allow(&self, channel_id: i64, _params: &BreakerParams) -> bool {
-        let mut map = self.inner.lock().unwrap();
+        let mut map = crate::util::lock_ok(&self.inner);
         let b = map.entry(channel_id).or_default();
         match b.state {
             State::Closed => true,
@@ -115,19 +126,22 @@ impl BreakerTable {
                 if Instant::now() >= b.open_until {
                     b.state = State::HalfOpen;
                     b.half_open_inflight = true;
+                    b.half_open_granted_at = Some(Instant::now());
                     true
                 } else {
                     false
                 }
             }
-            State::HalfOpen => !b.half_open_inflight,
+            State::HalfOpen => {
+                // 名额空闲,或上一轮探测超时未记账(异常路径泄漏)→ 放行新探测
+                !b.half_open_inflight || b.probe_expired()
+            }
         }
     }
 
     pub fn record_success(&self, channel_id: i64, params: &BreakerParams) -> Option<Transition> {
-        let mut map = self.inner.lock().unwrap();
+        let mut map = crate::util::lock_ok(&self.inner);
         let b = map.entry(channel_id).or_default();
-        let before = b.state;
         match b.state {
             State::HalfOpen => {
                 // 成功关闭:计数与窗口清零,冷却恢复默认
@@ -140,11 +154,7 @@ impl BreakerTable {
                 b.consecutive_failures = 0;
                 b.prune_window(params.window);
                 b.window.push_back((Instant::now(), true));
-                if before != State::Closed {
-                    Some(Transition { state: State::Closed, remaining_secs: 0 })
-                } else {
-                    None
-                }
+                None
             }
             State::Open => None, // 不应发生(Open 时被拒)
         }
@@ -157,7 +167,7 @@ impl BreakerTable {
         params: &BreakerParams,
         retry_after: Option<Duration>,
     ) -> Option<Transition> {
-        let mut map = self.inner.lock().unwrap();
+        let mut map = crate::util::lock_ok(&self.inner);
         let b = map.entry(channel_id).or_default();
         b.consecutive_failures += 1;
         match b.state {
@@ -174,6 +184,7 @@ impl BreakerTable {
                 b.current_cooldown = b.current_cooldown.min(params.backoff_max.max(Duration::from_secs(600)));
                 b.state = State::Open;
                 b.half_open_inflight = false;
+                b.half_open_granted_at = None;
                 b.open_until = Instant::now() + b.current_cooldown;
                 Some(Transition {
                     state: State::Open,
@@ -185,11 +196,7 @@ impl BreakerTable {
                 b.window.push_back((Instant::now(), false));
                 let samples = b.window.len() as u32;
                 let failures = b.window.iter().filter(|(_, ok)| !ok).count() as u32;
-                let failure_rate = if samples > 0 {
-                    failures as f64 / samples as f64
-                } else {
-                    0.0
-                };
+                let failure_rate = failures as f64 / samples.max(1) as f64;
                 let should_open = b.consecutive_failures >= params.consecutive_failures
                     || (samples >= params.sample_min && failure_rate >= params.failure_rate);
                 if should_open {
@@ -213,7 +220,7 @@ impl BreakerTable {
 
     /// 手动恢复:强制关闭并清空统计
     pub fn reset(&self, channel_id: i64) -> Option<Transition> {
-        let mut map = self.inner.lock().unwrap();
+        let mut map = crate::util::lock_ok(&self.inner);
         let b = map.entry(channel_id).or_default();
         if b.state == State::Closed {
             b.consecutive_failures = 0;
@@ -225,7 +232,7 @@ impl BreakerTable {
     }
 
     pub fn status(&self, channel_id: i64) -> Transition {
-        let map = self.inner.lock().unwrap();
+        let map = crate::util::lock_ok(&self.inner);
         match map.get(&channel_id) {
             Some(b) => {
                 let remaining = b
@@ -241,7 +248,7 @@ impl BreakerTable {
 
     /// 清空全部渠道状态(配置导入后渠道 id 全部重排时调用)
     pub fn clear_all(&self) {
-        self.inner.lock().unwrap().clear();
+        crate::util::lock_ok(&self.inner).clear();
     }
 }
 
@@ -277,7 +284,7 @@ mod tests {
 
         // 冷却期人为过期 → HalfOpen 放行 1 个
         {
-            let mut map = t.inner.lock().unwrap();
+            let mut map = crate::util::lock_ok(&t.inner);
             map.get_mut(&1).unwrap().open_until = Instant::now() - Duration::from_secs(1);
         }
         assert!(t.allow(1, &p));
@@ -295,7 +302,7 @@ mod tests {
         }
         assert_eq!(t.status(2).state, State::Open);
         {
-            let mut map = t.inner.lock().unwrap();
+            let mut map = crate::util::lock_ok(&t.inner);
             map.get_mut(&2).unwrap().open_until = Instant::now() - Duration::from_secs(1);
             map.get_mut(&2).unwrap().current_cooldown = p.cooldown;
         }
@@ -305,7 +312,7 @@ mod tests {
         assert_eq!(tr.remaining_secs, 120); // 60 × 2
         // 再失败翻倍
         {
-            let mut map = t.inner.lock().unwrap();
+            let mut map = crate::util::lock_ok(&t.inner);
             map.get_mut(&2).unwrap().open_until = Instant::now() - Duration::from_secs(1);
         }
         assert!(t.allow(2, &p));

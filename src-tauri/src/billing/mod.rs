@@ -22,14 +22,16 @@ impl Usage {
 ///
 /// 返回值单位为**微元**(1e-6 元,整数):旧「分」粒度下小额请求(如缓存长上下文
 /// 0.0157 元)被四舍五入到 2 分,虚高近 30%;微元与 UI 的 6 位小数显示精确对齐。
+///
+/// 计算顺序:先在 token 量级聚合各项乘积、最后一步才除 1e6——每项
+/// (token × 单价) 量级 ≤ 1e12,f64 精度足够;若先除再乘,大数值会引入 ±1 微元漂移。
 pub fn compute_cost(price: &pricing::PriceEntry, usage: &Usage) -> i64 {
     let plain_input = (usage.prompt - usage.cache_read - usage.cache_write).max(0) as f64;
-    let yuan = (plain_input * price.input
+    let micro_yuan = plain_input * price.input
         + usage.cache_read as f64 * price.cache_read
         + usage.cache_write as f64 * price.cache_write
-        + usage.completion as f64 * price.output)
-        / 1_000_000.0;
-    (yuan * 1_000_000.0).round() as i64
+        + usage.completion as f64 * price.output;
+    micro_yuan.round() as i64
 }
 
 #[cfg(test)]

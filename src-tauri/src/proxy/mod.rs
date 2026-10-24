@@ -143,7 +143,7 @@ pub async fn gemini_models(
         Ok(k) => k,
         Err(e) => return e.render(EntryProto::Gemini),
     };
-    let all = state.channels.read().unwrap().clone();
+    let all = util::read_ok(&state.channels).clone();
     let mut models: Vec<String> = Vec::new();
     for cid in &key.channels {
         if let Some(ch) = all.iter().find(|c| &c.id == cid) {
@@ -253,7 +253,7 @@ async fn gateway_inner(
         .as_ref()
         .map(|id| (id.clone(), ir.messages.clone()));
 
-    let all_channels = state.channels.read().unwrap().clone();
+    let all_channels = util::read_ok(&state.channels).clone();
     let mut attempts: Vec<Value> = Vec::new();
     let mut last_error = String::from("无可用渠道");
 
@@ -265,25 +265,28 @@ async fn gateway_inner(
         if !ch.enabled {
             continue;
         }
-        // 熔断跳过;HalfOpen 时放行 1 个探测请求
-        let bparams = effective_breaker_params(&state, ch);
-        if !state.breakers.allow(ch.id, &bparams) {
-            continue;
-        }
+        // 渠道适用性判断必须在 breakers.allow() 之前:
+        // allow() 会消费 HalfOpen 探测名额,若之后因模型不匹配/未配密钥 continue,
+        // 名额无人记账 → 渠道永久卡死 HalfOpen
         let mapped = mapped_model(ch, &model_in);
         if !channel_supports(ch, &mapped) {
             continue;
         }
-        let timeouts = effective_timeouts(&state, ch);
-        let mut retry_after: Option<Duration> = None;
-
-        let mut allow_inject = true;
         let keys_order = rotate_keys(&state, ch);
         if keys_order.is_empty() {
             attempts.push(attempt_json(ch, 0, 0, "渠道未配置上游密钥"));
             last_error = format!("渠道 {} 未配置上游密钥", ch.name);
             continue;
         }
+        // 熔断跳过;HalfOpen 时放行 1 个探测请求
+        let bparams = effective_breaker_params(&state, ch);
+        if !state.breakers.allow(ch.id, &bparams) {
+            continue;
+        }
+        let timeouts = effective_timeouts(&state, ch);
+        let mut retry_after: Option<Duration> = None;
+
+        let mut allow_inject = true;
         let mut key_pos = 0;
         let mut channel_failed = false;
 
@@ -299,7 +302,8 @@ async fn gateway_inner(
                 }
             };
             let last_dropped = prep.dropped.clone();
-            let t_try = Instant::now();            let send_res = send_upstream(&state, ch, &prep, up_key, &headers).await;
+            let t_try = Instant::now();
+            let send_res = send_upstream(&state, ch, &prep, up_key, &headers).await;
             let resp = match send_res {
                 Ok(r) => r,
                 Err(e) => {
@@ -410,6 +414,14 @@ async fn gateway_inner(
                 break;
             }
             // 其他 4xx:客户端问题,按原始错误体透传(状态码原样;非渠道故障,不 failover)
+            // 上游进程正常应答,记成功回收 HalfOpen 探测名额(否则坏请求撞上半开会卡死渠道)
+            if let Some(tr) =
+                state
+                    .breakers
+                    .record_success(ch.id, &effective_breaker_params(&state, ch))
+            {
+                emit_breaker(&state, ch.id, tr);
+            }
             finalize_log(FinalizeInput {
                 state: &state,
                 key: Some(&key),
@@ -444,9 +456,14 @@ async fn gateway_inner(
         }
     }
 
-    // 全部渠道失败
+    // 全部渠道失败:区分"无匹配渠道"与"全部被熔断跳过"(attempts 为空但渠道存在),
+    // 文案误导会显著增加排障成本
     let summary = if attempts.is_empty() {
-        "该密钥没有匹配此模型的可用渠道".to_string()
+        if all_channels.is_empty() {
+            "尚未配置任何渠道".to_string()
+        } else {
+            "该密钥没有匹配此模型的可用渠道(或渠道全部处于熔断中)".to_string()
+        }
     } else {
         format!("所有渠道均失败: {last_error}")
     };
@@ -608,10 +625,11 @@ async fn send_upstream(
             req = req.header("x-goog-api-key", key);
         }
     }
-    let resp = req
-        .body(prep.body.clone())
-        .send()
+    // 响应头超时复用 TTFT 上限:建连完成后上游若迟迟不回状态行(过载中转/坏代理),
+    // send() 会永久悬挂——TTFT 计时与 failover/熔断记账都在其后,必须在此处兜底
+    let resp = tokio::time::timeout(timeouts.ttft, req.body(prep.body.clone()).send())
         .await
+        .map_err(|_| format!("上游响应头超时({}s)", timeouts.ttft.as_secs()))?
         .map_err(|e| {
             if e.is_timeout() {
                 "上游请求超时".to_string()
@@ -631,7 +649,7 @@ fn http_client(
     connect_secs: u64,
 ) -> Result<reqwest::Client, String> {
     let cache_key = format!("{}|{connect_secs}", proxy.clone().unwrap_or_default());
-    if let Some(c) = state.http.lock().unwrap().get(&cache_key) {
+    if let Some(c) = util::lock_ok(&state.http).get(&cache_key) {
         return Ok(c.clone());
     }
     let mut builder = reqwest::Client::builder()
@@ -1048,7 +1066,7 @@ pub async fn list_models(
             return e.render(entry);
         }
     };
-    let all = state.channels.read().unwrap().clone();
+    let all = util::read_ok(&state.channels).clone();
     let mut models: Vec<String> = Vec::new();
     for cid in &key.channels {
         if let Some(ch) = all.iter().find(|c| &c.id == cid) {
@@ -1130,7 +1148,7 @@ fn rotate_keys(state: &AppState, ch: &Channel) -> Vec<String> {
         return vec![];
     }
     let start = {
-        let mut counters = state.key_counters.lock().unwrap();
+        let mut counters = util::lock_ok(&state.key_counters);
         let e = counters.entry(ch.id).or_insert(0);
         *e = (*e + 1) % n;
         *e
@@ -1230,13 +1248,45 @@ fn attempt_json(ch: &Channel, status: u16, elapsed_ms: i64, error: &str) -> Valu
 }
 
 fn err_body_excerpt(body: &str) -> String {
-    // 尝试提取 error.message,失败则原样截断
-    if let Ok(v) = serde_json::from_str::<Value>(body) {
-        if let Some(msg) = v.pointer("/error/message").and_then(Value::as_str) {
-            return msg.to_string();
-        }
+    // 优先取结构化 error.message;取不到(或非 JSON)时退回原文。
+    // 统一截断后再脱敏:上游 error.message 可能极大(几 MB),不截断会
+    // 原样进 503 响应体、日志 error 与 attempts,放大内存并污染日志库
+    let excerpt = match serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| v.pointer("/error/message").cloned())
+    {
+        Some(Value::String(msg)) => msg,
+        _ => body.to_string(),
+    };
+    sanitize_error(&util::truncate_utf8(&excerpt, 500))
+}
+
+/// 错误文本脱敏:部分上游会把请求方的 API key 回显在错误消息里
+/// (如 "invalid key sk-xxx"),原样透传给客户端并存入日志即泄漏
+/// sk- 前缀类(OpenAI/Anthropic/自建)与 Bearer token 模式
+fn sanitize_error(s: &str) -> String {
+    // 一次性编译:错误路径高频触发,每次 new 正则浪费明显
+    static PATTERNS: std::sync::LazyLock<Vec<regex::Regex>> = std::sync::LazyLock::new(|| {
+        [
+            r"(?i)sk-[A-Za-z0-9_\-]{8,}",
+            r"(?i)Bearer\s+[A-Za-z0-9._\-]{8,}",
+            r"(?i)AIza[A-Za-z0-9_\-]{8,}",
+        ]
+        .iter()
+        .map(|p| regex::Regex::new(p).expect("脱敏正则编译失败"))
+        .collect()
+    });
+    let mut out = s.to_string();
+    for re in PATTERNS.iter() {
+        out = re
+            .replace_all(&out, |caps: &regex::Captures| {
+                let m = caps.get(0).map(|m| m.as_str()).unwrap_or("");
+                let keep = m.chars().take(5).collect::<String>();
+                format!("{keep}***")
+            })
+            .into_owned();
     }
-    util::truncate_utf8(body, 500)
+    out
 }
 
 /// 其他 4xx:原始错误体透传(状态码原样)
@@ -1263,7 +1313,9 @@ fn snapshot(state: &AppState, body: &Value) -> Option<String> {
     let full = state.current_settings().save_full_body;
     let s = serde_json::to_string(body).ok()?;
     Some(if full {
-        s
+        // 即便完整保存也设 1MB 上限:日志队列按条数(4096)限流,DB 写入变慢时
+        // 大快照积压可把内存放大到 GB 级
+        util::truncate_utf8(&s, 1024 * 1024)
     } else {
         util::truncate_utf8(&s, 32 * 1024)
     })
@@ -1271,7 +1323,7 @@ fn snapshot(state: &AppState, body: &Value) -> Option<String> {
 
 fn truncate_snapshot(state: &AppState, s: &str) -> String {
     if state.current_settings().save_full_body {
-        s.to_string()
+        util::truncate_utf8(s, 1024 * 1024)
     } else {
         util::truncate_utf8(s, 32 * 1024)
     }
@@ -1334,7 +1386,7 @@ fn finalize_log(input: FinalizeInput) {
     };
 
     // 计价:入口模型名优先,无匹配回退映射名
-    let prices = state.prices.read().unwrap();
+    let prices = util::read_ok(&state.prices);
     let price = prices
         .match_for(model_in)
         .or_else(|| mapped.and_then(|m| prices.match_for(m)))

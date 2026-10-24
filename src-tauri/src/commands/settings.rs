@@ -34,7 +34,7 @@ pub async fn update_settings(
     }
 
     store::settings::save(&state.db, &new_settings).await?;
-    *state.settings.write().unwrap() = new_settings.clone();
+    *crate::util::write_ok(&state.settings) = new_settings.clone();
 
     events::emit(&app, GatewayEvent::SettingsChanged);
     // 自启勾选态可能变化,同步托盘菜单

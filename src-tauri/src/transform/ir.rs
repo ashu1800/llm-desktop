@@ -43,6 +43,18 @@ pub enum Block {
     },
 }
 
+impl Block {
+    /// 近似字节量(内存上限估算用;图片按 b64 长度计,工具入参按 JSON 序列化后计)
+    pub fn text_len(&self) -> usize {
+        match self {
+            Block::Text { text, .. } | Block::Thinking { text, .. } => text.len(),
+            Block::Image { data_b64, .. } => data_b64.len(),
+            Block::ToolUse { input, .. } => input.to_string().len(),
+            Block::ToolResult { content, .. } => content.len(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Message {
     pub role: Role,

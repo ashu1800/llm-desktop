@@ -30,7 +30,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn is_running(app: &AppHandle) -> bool {
-    app.state::<AppState>().server.lock().unwrap().is_some()
+    crate::util::lock_ok(&app.state::<AppState>().server).is_some()
 }
 
 fn current_icon(app: &AppHandle) -> tauri::image::Image<'static> {
@@ -47,7 +47,7 @@ fn current_icon(app: &AppHandle) -> tauri::image::Image<'static> {
 
 fn is_degraded(app: &AppHandle) -> bool {
     let state = app.state::<AppState>();
-    let channels = state.channels.read().unwrap();
+    let channels = crate::util::read_ok(&state.channels);
     let enabled: Vec<_> = channels.iter().filter(|c| c.enabled).collect();
     !enabled.is_empty()
         && enabled
@@ -90,7 +90,7 @@ fn on_menu_event(app: &AppHandle, id: &str) {
             let state = app.state::<AppState>().inner().clone();
             let handle = app.clone();
             tauri::async_runtime::spawn(async move {
-                let running = state.server.lock().unwrap().is_some();
+                let running = crate::util::lock_ok(&state.server).is_some();
                 let result = if running {
                     crate::server::manager::stop(&state, &handle).await.map(|_| ())
                 } else {
@@ -110,7 +110,7 @@ fn on_menu_event(app: &AppHandle, id: &str) {
             }
             let snapshot = {
                 let state = app.state::<AppState>();
-                let mut s = state.settings.write().unwrap();
+                let mut s = crate::util::write_ok(&state.settings);
                 s.autostart = want;
                 s.clone()
             };

@@ -15,7 +15,7 @@ pub struct BreakerStatus {
 
 #[tauri::command]
 pub async fn get_breaker_states(state: State<'_, AppState>) -> Result<Vec<BreakerStatus>, String> {
-    let channels = state.channels.read().unwrap();
+    let channels = crate::util::read_ok(&state.channels);
     Ok(channels
         .iter()
         .map(|c| {

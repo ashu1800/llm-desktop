@@ -240,7 +240,8 @@ pub fn parse_request(v: &Value, model_from_path: Option<&str>) -> Result<Canonic
         .and_then(Value::as_u64)
     {
         if budget > 0 {
-            ir.reasoning = Some(Reasoning::Budget(budget as u32));
+            // 饱和转换,防 u64 超大值静默回绕
+            ir.reasoning = Some(Reasoning::Budget(u32::try_from(budget).unwrap_or(u32::MAX)));
         }
     }
 
@@ -460,8 +461,10 @@ pub fn parse_finish(s: &str) -> StopReason {
 pub fn render_finish(sr: StopReason) -> &'static str {
     match sr {
         StopReason::MaxTokens => "MAX_TOKENS",
-        StopReason::EndTurn => "STOP",
-        _ => "OTHER",
+        // Gemini 语义:正常结束(含工具调用轮)都是 STOP;"OTHER" 会被
+        // gemini-sdk 类客户端视为异常中断,破坏 agent 循环
+        StopReason::EndTurn | StopReason::ToolUse | StopReason::StopSequence => "STOP",
+        StopReason::Other => "OTHER",
     }
 }
 
@@ -489,7 +492,6 @@ pub fn parse_chunk(v: &Value, call_counter: &mut u32) -> GeminiChunk {
         };
     }
     let mut events = Vec::new();
-    let mut block_seq = 0usize;
     if let Some(candidates) = v.get("candidates").and_then(Value::as_array) {
         if let Some(c) = candidates.first() {
             if let Some(parts) = c.pointer("/content/parts").and_then(Value::as_array) {
@@ -504,7 +506,10 @@ pub fn parse_chunk(v: &Value, call_counter: &mut u32) -> GeminiChunk {
                             }
                         }
                     } else if let Some(fc) = p.get("functionCall") {
+                        // call_counter 由 UpstreamSse 持有,跨 chunk 单调递增;
+                        // 局部变量会每 chunk 重置,并行调用全部撞同一 block 号
                         *call_counter += 1;
+                        let block = *call_counter as usize;
                         let id = format!("call_{call_counter}");
                         let name = fc
                             .get("name")
@@ -514,18 +519,15 @@ pub fn parse_chunk(v: &Value, call_counter: &mut u32) -> GeminiChunk {
                         let args = fc.get("args").cloned().unwrap_or_else(|| json!({}));
                         let args_str = args.to_string();
                         events.push(StreamEvent::ToolStart {
-                            block: 1 + block_seq,
+                            block,
                             id,
                             name,
                         });
                         events.push(StreamEvent::ToolDelta {
-                            block: 1 + block_seq,
+                            block,
                             json: args_str,
                         });
-                        events.push(StreamEvent::BlockStop {
-                            block: 1 + block_seq,
-                        });
-                        block_seq += 1;
+                        events.push(StreamEvent::BlockStop { block });
                     }
                 }
             }
@@ -656,8 +658,10 @@ impl UpstreamSse {
 pub struct EntrySse {
     model: String,
     finished: bool,
-    /// ToolStart 暂存函数名,ToolDelta 时合成完整 functionCall part
-    pending_tool: Option<String>,
+    /// 按 block 累积工具调用 (name, args 缓冲):上游 arguments 分多片 delta 到达,
+    /// 必须攒齐后在 BlockStop/Finish 一次解析发射,否则产生空函数名/坏参数分片;
+    /// HashMap 支持并行多调用交错
+    pending_tools: std::collections::HashMap<usize, (String, String)>,
 }
 
 impl EntrySse {
@@ -665,7 +669,24 @@ impl EntrySse {
         Self {
             model: model.to_string(),
             finished: false,
-            pending_tool: None,
+            pending_tools: Default::default(),
+        }
+    }
+
+    /// 把累积完的工具调用一次性发射(Gemini 语义:一条 functionCall = 完整 args)
+    fn flush_tool(&mut self, block: usize, out: &mut Vec<String>) {
+        if let Some((name, args_buf)) = self.pending_tools.remove(&block) {
+            let args: Value = serde_json::from_str(&args_buf).unwrap_or_else(|_| json!({}));
+            out.push(data_line(
+                &json!({
+                    "candidates": [
+                        {"content": {"role": "model", "parts": [
+                            {"functionCall": {"name": name, "args": args}},
+                        ]}},
+                    ],
+                })
+                .to_string(),
+            ));
         }
     }
 
@@ -682,29 +703,32 @@ impl EntrySse {
                 }).to_string()));
             }
             StreamEvent::ReasoningDelta { text } => {
+                // Gemini 协议:thought 是 text part 自身字段,不能拆成独立 part
                 out.push(data_line(&json!({
-                    "candidates": [{"content": {"role": "model", "parts": [{"thought": true}, {"text": text}]}}],
+                    "candidates": [{"content": {"role": "model", "parts": [{"text": text, "thought": true}]}}],
                 }).to_string()));
             }
-            StreamEvent::ToolStart { name, .. } => {
-                self.pending_tool = Some(name.clone());
+            StreamEvent::ToolStart { block, name, .. } => {
+                self.pending_tools
+                    .entry(*block)
+                    .or_insert_with(|| (name.clone(), String::new()));
             }
-            StreamEvent::ToolDelta { json, .. } => {
-                let args: Value = serde_json::from_str(json).unwrap_or_else(|_| json!({}));
-                let name = self.pending_tool.take().unwrap_or_default();
-                out.push(data_line(
-                    &json!({
-                        "candidates": [
-                            {"content": {"role": "model", "parts": [
-                                {"functionCall": {"name": name, "args": args}},
-                            ]}},
-                        ],
-                    })
-                    .to_string(),
-                ));
+            StreamEvent::ToolDelta { block, json } => {
+                self.pending_tools
+                    .entry(*block)
+                    .or_insert_with(|| (String::new(), String::new()))
+                    .1
+                    .push_str(json);
             }
-            StreamEvent::BlockStop { .. } => {}
+            StreamEvent::BlockStop { block } => {
+                self.flush_tool(*block, out);
+            }
             StreamEvent::Finish { stop_reason, usage } => {
+                // 兜底:上游未发 BlockStop 的遗留调用全部冲刷
+                let blocks: Vec<usize> = self.pending_tools.keys().copied().collect();
+                for b in blocks {
+                    self.flush_tool(b, out);
+                }
                 let mut body = json!({
                     "candidates": [{
                         "content": {"role": "model", "parts": []},

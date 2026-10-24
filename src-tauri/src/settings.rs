@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// 应用设置(全局唯一,settings 表 key = "app")
 /// 字段默认值均为拍板决策,见 PRD §3.8 / §11
@@ -16,6 +17,10 @@ pub struct AppSettings {
     /// light | dark | system
     pub theme: String,
     pub language: String,
+    /// 客户端显示名映射:键 = ua_to_client 识别出的原名,值 = 自定义显示名
+    pub client_aliases: HashMap<String, String>,
+    /// 客户端图标映射:键 = 原名,值 = emoji(前端渲染在名称前)
+    pub client_icons: HashMap<String, String>,
     pub breaker: BreakerDefaults,
     pub timeouts: TimeoutDefaults,
 }
@@ -61,6 +66,8 @@ impl Default for AppSettings {
             save_full_body: false,
             theme: "system".into(),
             language: "zh-CN".into(),
+            client_aliases: HashMap::new(),
+            client_icons: HashMap::new(),
             breaker: BreakerDefaults::default(),
             timeouts: TimeoutDefaults::default(),
         }
@@ -122,6 +129,20 @@ impl AppSettings {
         self.timeouts.ttft_secs = self.timeouts.ttft_secs.clamp(5, 3600);
         self.timeouts.stream_idle_secs = self.timeouts.stream_idle_secs.clamp(5, 3600);
         self.timeouts.non_stream_total_secs = self.timeouts.non_stream_total_secs.clamp(5, 7200);
+        // 客户端映射清理:空显示名视为删除该条目;键值超长截断防滥用
+        let cut = |s: &str, max: usize| -> String { s.chars().take(max).collect() };
+        self.client_aliases = self
+            .client_aliases
+            .iter()
+            .filter(|(_, v)| !v.trim().is_empty())
+            .map(|(k, v)| (cut(k, 40), cut(v.trim(), 40)))
+            .collect();
+        self.client_icons = self
+            .client_icons
+            .iter()
+            .filter(|(_, v)| !v.trim().is_empty())
+            .map(|(k, v)| (cut(k, 40), cut(v.trim(), 8)))
+            .collect();
         self
     }
 }

@@ -32,3 +32,9 @@ pub async fn get_stats(
 pub async fn clear_logs(state: State<'_, AppState>) -> Result<(), String> {
     logs::clear_all(&state.db).await
 }
+
+/// 历史日志中出现过的客户端名(去重):客户端映射页的条目来源
+#[tauri::command]
+pub async fn list_clients(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    logs::list_clients(&state.db).await
+}
