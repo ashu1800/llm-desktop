@@ -173,11 +173,6 @@ tray.rs / autostart.rs  托盘 / 开机自启
 27. **(实施登记)** 端口热改的旧监听在后台排水:进行中的请求继续在旧端口完成(符合"管理操作不中断请求"),设置命令立即返回,不阻塞 UI。
 28. **(实施登记)** 上游中断/流内错误/空闲超时发生时,网关向客户端补发入口协议内的错误事件(OpenAI `data:{error}`+`[DONE]`、Anthropic `event:error`、Responses `type:error`、Gemini `data:{error}`),客户端 SDK 立即感知失败而非悬挂;流开始后的失败仍不重试、已产生 token 照常计费。
 29. **(实施登记)** 自动更新采用 **GitHub Releases + latest.json + minisign 签名**(tauri-plugin-updater):更新端点指向 `releases/latest/download/latest.json`;签名私钥仅存本机 `~/.tauri/`(gitignore)与仓库 GitHub Secrets,公钥随配置入库;发布经 GitHub Actions 打 tag 自动构建,本地不手工出包。
-24. **(实施登记)** 日志保留清理为每小时幂等删除(等效"每日凌晨清理"的结果,无需定时器精确到凌晨);保留天数 0 不清理,默认 90 天。
-25. **(实施登记)** 配置导入为**整表替换**(渠道/密钥/定价先清空后写入,单事务,失败整体回滚;密钥按旧→新渠道 id 重映射),设置覆盖保存;请求日志不导出不受导入影响。
-26. **(实施登记)** 配置导入后复用 update_settings 的热生效路径(端口/监听平滑切换 + 开机自启同步),并清空按旧渠道 id 记账的熔断状态与密钥轮询起点。
-27. **(实施登记)** 端口热改的旧监听在后台排水:进行中的请求继续在旧端口完成(符合"管理操作不中断请求"),设置命令立即返回,不阻塞 UI。
-28. **(实施登记)** 上游中断/流内错误/空闲超时发生时,网关向客户端补发入口协议内的错误事件(OpenAI `data:{error}`+`[DONE]`、Anthropic `event:error`、Responses `type:error`、Gemini `data:{error}`),客户端 SDK 立即感知失败而非悬挂;流开始后的失败仍不重试、已产生 token 照常计费。
 
 ## 明确不做(v1 范围外)
 
