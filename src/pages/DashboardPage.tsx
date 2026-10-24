@@ -50,9 +50,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { useAppStore } from "@/stores/app-store";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -313,12 +313,12 @@ function StatusCell({ status }: { status: number }) {
 function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
   const attemptCount = parseAttempts(l.attempts).length;
   return (
-    <tr className="border-b last:border-0 hover:bg-accent/30">
+    <tr className="border-b text-center last:border-0 hover:bg-accent/30">
       <td className="py-2.5 pr-3 font-mono text-xs" title={fmtFullTime(l.ts)}>
         {fmtTime(l.ts)}
       </td>
       <td className="py-2.5 pr-3">
-        <div className="flex items-center gap-1.5">
+        <div className="inline-flex items-center gap-1.5">
           <Badge variant="secondary" className="max-w-[180px] truncate px-1.5 font-mono">
             {l.model}
           </Badge>
@@ -337,7 +337,7 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
         </span>
       </td>
       <td className="py-2.5 pr-3 font-mono text-xs leading-5">
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center justify-center gap-2.5">
           <span className="text-orange-500" title={`总输入 ${fmtK(l.promptTokens)}(含缓存)`}>
             ↑{fmtK(l.promptTokens - l.cacheRead - l.cacheWrite)}
           </span>
@@ -345,7 +345,7 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
             ↓{fmtK(l.completionTokens)}
           </span>
         </div>
-        <div className="flex items-center gap-1 text-muted-foreground">
+        <div className="flex items-center justify-center gap-1 text-muted-foreground">
           <Database className="h-3 w-3" />
           <span className="text-emerald-500" title="缓存命中词元">
             {fmtK(l.cacheRead)}
@@ -355,8 +355,8 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
           </span>
         </div>
       </td>
-      {/* 流式正常色,非流式整块淡色以字体颜色区分 */}
-      <td className={cn("py-2.5 pr-3 font-mono text-xs leading-5", !l.isStream && "text-muted-foreground")}>
+      {/* 任务耗时:单元格保持左对齐,竖条锚点行参差不出缩进;流式正常色,非流式整块淡色 */}
+      <td className={cn("py-2.5 pr-3 text-left font-mono text-xs leading-5", !l.isStream && "text-muted-foreground")}>
         <div className="space-y-0.5">
           <div className="flex items-center gap-1.5">
             <span className="h-3 w-0.5 shrink-0 rounded-full bg-zinc-400" />
@@ -377,7 +377,7 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
           </div>
         </div>
       </td>
-      <td className="py-2.5 pr-3 text-right font-mono text-xs">
+      <td className="py-2.5 pr-3 font-mono text-xs">
         {l.cost != null && (
           <span title={l.estimated ? "usage 为本地估算" : undefined}>
             {l.estimated ? "~" : ""}
@@ -406,8 +406,7 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
           详情
         </Button>
       </td>
-    </tr>
-  );
+    </tr>  );
 }
 
 // ---------- 数据总览页 ----------
@@ -422,10 +421,10 @@ export function DashboardPage() {
   const [channelFilter, setChannelFilter] = useState("all");
   const [keyFilter, setKeyFilter] = useState("all");
   const [statusClass, setStatusClass] = useState("all");
-  const [model, setModel] = useState("");
-  const [keyword, setKeyword] = useState("");
   const [page, setPage] = useState(0);
-  const [live, setLive] = useState(true);
+  // 实时同步开关入全局 store:useGatewayEvents(挂载在 App)据此决定是否响应落库事件
+  const live = useAppStore((s) => s.logsLive);
+  const setLive = useAppStore((s) => s.setLogsLive);
   const [detailId, setDetailId] = useState<number | null>(null);
 
   const filter = useMemo<LogFilter>(
@@ -435,16 +434,14 @@ export function DashboardPage() {
       keyId: keyFilter === "all" ? null : Number(keyFilter),
       statusClass:
         statusClass === "all" ? null : (statusClass as "success" | "error"),
-      model: model || undefined,
-      keyword: keyword || undefined,
       offset: page * PAGE_SIZE,
       limit: PAGE_SIZE,
     }),
-    [range, channelFilter, keyFilter, statusClass, model, keyword, page],
+    [range, channelFilter, keyFilter, statusClass, page],
   );
 
   const { data: stats } = useStats(filter);
-  const { data, isLoading, isFetching } = useLogs(filter, live);
+  const { data, isLoading, isFetching } = useLogs(filter);
   const [items, total] = data ?? [[], 0];
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -568,24 +565,6 @@ export function DashboardPage() {
             <SelectItem value="error">失败</SelectItem>
           </SelectContent>
         </Select>
-        <Input
-          value={model}
-          onChange={(e) => {
-            setModel(e.target.value);
-            resetPage();
-          }}
-          placeholder="模型名"
-          className="h-8 w-[150px] text-xs"
-        />
-        <Input
-          value={keyword}
-          onChange={(e) => {
-            setKeyword(e.target.value);
-            resetPage();
-          }}
-          placeholder="关键字(模型/错误)"
-          className="h-8 w-[170px] text-xs"
-        />
       </div>
 
       {/* 汇总卡片:图标色块风,与筛选联动 */}
@@ -629,15 +608,13 @@ export function DashboardPage() {
         <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
           <div>
             <CardTitle className="text-base">请求日志</CardTitle>
-            <CardDescription>
-              共 {total} 条{live && " · 10s 自动刷新"}
-            </CardDescription>
+            <CardDescription>共 {total} 条 · 实时同步</CardDescription>
           </div>
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <Button
               variant="ghost"
               size="icon"
-              title={live ? "暂停自动刷新" : "开启自动刷新(10s)"}
+              title={live ? "暂停实时同步" : "开启实时同步"}
               onClick={() => setLive(!live)}
             >
               {live ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
@@ -669,10 +646,11 @@ export function DashboardPage() {
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="overflow-x-auto">
+        {/* 限高内滚:日志多时表头 sticky 钉住,不随页面滚动 */}
+        <CardContent className="max-h-[calc(100vh-420px)] min-h-[240px] overflow-auto">
           {isLoading ? (
             <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" /> 加载中…
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> 加载中…
             </div>
           ) : items.length === 0 ? (
             <div className="flex flex-col items-center gap-2 py-10 text-center">
@@ -683,14 +661,15 @@ export function DashboardPage() {
             </div>
           ) : (
             <table className="w-full min-w-[1100px] text-sm">
-              <thead>
-                <tr className="border-b text-left text-xs text-muted-foreground">
+              <thead className="sticky top-0 z-10 bg-card">
+                {/* 任务耗时列特殊:内容与表头均左对齐(竖条锚点行),其余列居中 */}
+                <tr className="border-b text-center text-xs text-muted-foreground">
                   <th className="py-2 pr-3 font-medium">时间</th>
                   <th className="py-2 pr-3 font-medium">模型</th>
                   <th className="py-2 pr-3 font-medium">渠道</th>
                   <th className="py-2 pr-3 font-medium">词元</th>
-                  <th className="py-2 pr-3 font-medium">任务耗时</th>
-                  <th className="py-2 pr-3 text-right font-medium">费用</th>
+                  <th className="py-2 pr-3 text-left font-medium">任务耗时</th>
+                  <th className="py-2 pr-3 font-medium">费用</th>
                   <th className="py-2 pr-3 font-medium">状态</th>
                   <th className="py-2 pr-3 font-medium">密钥</th>
                   <th className="py-2 pr-3 font-medium">客户端</th>
