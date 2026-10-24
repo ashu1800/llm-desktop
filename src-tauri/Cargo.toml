@@ -70,6 +70,8 @@ reqwest = { version = "0.12", default-features = false, features = [
 wiremock = "0.6"
 
 [profile.release]
-codegen-units = 1
-lto = "thin"
+# 发布构建提速:codegen-units=16 与 lto=false 相比默认(cgu=1+thin LTO)显著缩短
+# CI 构建时间;二进制略大、运行时性能差异对网关负载不可感知。
+# 需要极致性能的手工发布可临时改回 cgu=1 + lto="thin"
+codegen-units = 16
 strip = true

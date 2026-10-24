@@ -76,9 +76,13 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # shared-key 固定:默认按 git ref 派生 key,发版走 tag ref 导致每次缓存
+      # miss、356+ crates 全量重编(约 8 分钟)。固定后跨 tag 命中,只重编变更链
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          shared-key: release
+          prefix-key: v1
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
