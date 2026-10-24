@@ -12,6 +12,7 @@ pub mod state;
 pub mod store;
 pub mod transform;
 pub mod tray;
+pub mod update_flag;
 pub mod util;
 
 use tauri::Manager;
@@ -58,10 +59,14 @@ pub fn run() {
             autostart::sync_with_settings(&handle, state.current_settings().autostart);
             tray::create(&handle)?;
 
-            // --silent 参数或设置项 → 静默启动,仅托盘运行
-            let silent =
-                std::env::args().any(|a| a == "--silent") || state.current_settings().silent_start;
-            if !silent {
+            // --silent 参数或设置项 → 静默启动,仅托盘运行;
+            // 例外:更新安装后重启(一次性标记)强制显示界面——用户刚主动更新,
+            // 预期是看到新版本,静默设置只应约束开机自启等场景
+            let data_dir = handle.path().app_data_dir()?;
+            let updated_restart = update_flag::take(&data_dir);
+            let silent = std::env::args().any(|a| a == "--silent")
+                || state.current_settings().silent_start;
+            if updated_restart || !silent {
                 show_main_window(&handle);
             }
 
@@ -104,6 +109,7 @@ pub fn run() {
             commands::service::get_service_status,
             commands::service::start_service,
             commands::service::stop_service,
+            commands::service::mark_update_restart,
             commands::channels::list_channels,
             commands::channels::create_channel,
             commands::channels::update_channel,

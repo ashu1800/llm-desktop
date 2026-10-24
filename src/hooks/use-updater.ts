@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { check, type Update, type DownloadEvent } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 
 export type UpdatePhase =
@@ -110,6 +111,9 @@ export function useUpdater(options?: { auto?: boolean }) {
     if (!update) return;
     setState((s) => ({ ...s, phase: "downloading", downloaded: 0, total: null, error: null }));
     try {
+      // 安装会经 NSIS /R 重启应用;先落盘标记,新实例据此强制显示界面
+      // (否则静默启动设置会让更新后的窗口不出现)。失败不阻断更新。
+      await invoke("mark_update_restart").catch(() => {});
       await update.downloadAndInstall(applyEvent);
       setState((s) => ({ ...s, phase: "ready" }));
     } catch (e) {
