@@ -28,8 +28,8 @@ export interface UpdaterState {
   pendingUpdate: boolean;
 }
 
-/** 自动模式下周期性重查间隔:发版后无需重启即可被发现 */
-const AUTO_RECHECK_INTERVAL_MS = 5 * 60 * 1000;
+/** 自动模式下周期性重查间隔:发版后约 1 分钟内即可被发现 */
+const AUTO_RECHECK_INTERVAL_MS = 60 * 1000;
 
 // 模块级共享:App(启动自动)与设置页(手动)两个 hook 实例共用同一次网络检查
 type CheckOutcome = { update: Update | null } | { error: string };
