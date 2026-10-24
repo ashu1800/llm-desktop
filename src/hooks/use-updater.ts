@@ -27,6 +27,9 @@ export interface UpdaterState {
   pendingUpdate: boolean;
 }
 
+/** 自动模式下周期性重查间隔:发版后无需重启即可被发现 */
+const AUTO_RECHECK_INTERVAL_MS = 5 * 60 * 1000;
+
 // 模块级共享:App(启动自动)与设置页(手动)两个 hook 实例共用同一次网络检查
 type CheckOutcome = { update: Update | null } | { error: string };
 let inFlightCheck: Promise<CheckOutcome> | null = null;
@@ -61,6 +64,10 @@ export function useUpdater(options?: { auto?: boolean }) {
   });
   // check() 返回的 Update 对象必须持有引用才能 downloadAndInstall
   const updateRef = useRef<Update | null>(null);
+  const phaseRef = useRef<UpdatePhase>(state.phase);
+  useEffect(() => {
+    phaseRef.current = state.phase;
+  }, [state.phase]);
 
   const applyEvent = (e: DownloadEvent) => {
     setState((s) => {
@@ -114,17 +121,26 @@ export function useUpdater(options?: { auto?: boolean }) {
     await relaunch();
   }, []);
 
-  // 当前版本 + 启动检查(每次启动一次;失败静默,不打扰)
+  // 当前版本 + 启动检查 + 每 5 分钟重查(失败静默,不打扰)
   useEffect(() => {
     let disposed = false;
     getVersion()
       .then((v) => !disposed && setState((s) => ({ ...s, currentVersion: v })))
       .catch(() => {});
+    let timer: ReturnType<typeof setInterval> | undefined;
     if (auto) {
       runCheck().catch(() => {});
+      timer = setInterval(() => {
+        // 下载中/待重启时不重查,避免打断进行中的安装
+        if (phaseRef.current === "downloading" || phaseRef.current === "ready") {
+          return;
+        }
+        runCheck().catch(() => {});
+      }, AUTO_RECHECK_INTERVAL_MS);
     }
     return () => {
       disposed = true;
+      if (timer) clearInterval(timer);
     };
   }, [auto, runCheck]);
 
