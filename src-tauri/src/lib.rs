@@ -133,9 +133,11 @@ pub fn run() {
             commands::logs::get_stats,
             commands::logs::clear_logs,
             commands::logs::list_clients,
+            commands::logs::list_models,
             commands::config::export_config,
             commands::config::import_config_preview,
             commands::config::import_config_apply,
+            commands::icons::pick_client_icon,
             commands::breaker::get_breaker_states,
             commands::breaker::recover_channel,
         ])

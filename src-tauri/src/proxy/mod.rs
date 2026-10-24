@@ -1395,6 +1395,11 @@ fn finalize_log(input: FinalizeInput) {
     let success = (200..300).contains(&status) && error.is_none();
     let cost = price.as_ref().map(|p| billing::compute_cost(p, &usage));
     let unpriced = success && cost.is_none();
+    // 币种随定价条目:美元条目按微美元记账,与人民币分列统计
+    let currency = price
+        .as_ref()
+        .map(|p| billing::currency_of(p).as_str().to_string())
+        .unwrap_or_else(|| billing::Currency::Cny.as_str().to_string());
 
     let entry = RequestLog {
         ts: util::now_ms(),
@@ -1420,6 +1425,7 @@ fn finalize_log(input: FinalizeInput) {
         total_ms: Some(total_ms),
         speed,
         cost,
+        currency,
         client: Some(util::ua_to_client(client)),
         req_snapshot,
         resp_snapshot,
