@@ -6,6 +6,23 @@ export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
+      fontFamily: {
+        // Claude 风:Figtree 覆盖拉丁/数字,中文回退系统雅黑
+        sans: [
+          '"Figtree Variable"',
+          '"Microsoft YaHei"',
+          '"PingFang SC"',
+          'system-ui',
+          'sans-serif',
+        ],
+        mono: [
+          '"JetBrains Mono Variable"',
+          '"Cascadia Mono"',
+          'Consolas',
+          '"Microsoft YaHei"',
+          'monospace',
+        ],
+      },
       colors: {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",

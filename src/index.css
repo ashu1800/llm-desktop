@@ -4,56 +4,58 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 240 10% 3.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 240 10% 3.9%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 240 10% 3.9%;
-    --primary: 240 5.9% 10%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 240 4.8% 95.9%;
-    --secondary-foreground: 240 5.9% 10%;
-    --muted: 240 4.8% 95.9%;
-    --muted-foreground: 240 3.8% 46.1%;
-    --accent: 240 4.8% 95.9%;
-    --accent-foreground: 240 5.9% 10%;
-    --destructive: 0 84.2% 60.2%;
+    /* Claude 浅色:象牙白背景 + 暖奶油面板 + 陶土橘主色(Anthropic Crail #D97757) */
+    --background: 48 33% 97%;
+    --foreground: 30 4% 12%;
+    --card: 45 43% 98%;
+    --card-foreground: 30 4% 12%;
+    --popover: 45 43% 98%;
+    --popover-foreground: 30 4% 12%;
+    --primary: 15 63% 60%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 48 25% 92%;
+    --secondary-foreground: 30 4% 12%;
+    --muted: 48 25% 92%;
+    --muted-foreground: 45 6% 42%;
+    --accent: 48 33% 89%;
+    --accent-foreground: 30 4% 12%;
+    --destructive: 0 60% 48%;
     --destructive-foreground: 0 0% 98%;
-    --success: 142 72% 36%;
+    --success: 150 40% 40%;
     --success-foreground: 0 0% 98%;
-    --warning: 32 95% 44%;
+    --warning: 35 80% 48%;
     --warning-foreground: 0 0% 98%;
-    --border: 240 5.9% 90%;
-    --input: 240 5.9% 90%;
-    --ring: 240 10% 3.9%;
+    --border: 42 20% 87%;
+    --input: 42 20% 84%;
+    --ring: 15 63% 60%;
     --radius: 0.5rem;
   }
 
   .dark {
-    --background: 240 10% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 240 10% 5.9%;
-    --card-foreground: 0 0% 98%;
-    --popover: 240 10% 3.9%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 240 5.9% 10%;
-    --secondary: 240 3.7% 15.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 240 3.7% 15.9%;
-    --muted-foreground: 240 5% 64.9%;
-    --accent: 240 3.7% 15.9%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 62.8% 50.6%;
+    /* Claude 深色:暖炭灰背景 + 亮一档卡片,主色微提亮 */
+    --background: 60 3% 14%;
+    --foreground: 48 26% 95%;
+    --card: 60 3% 18%;
+    --card-foreground: 48 26% 95%;
+    --popover: 60 3% 18%;
+    --popover-foreground: 48 26% 95%;
+    --primary: 15 66% 62%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 30 3% 12%;
+    --secondary-foreground: 48 26% 95%;
+    --muted: 30 3% 12%;
+    --muted-foreground: 45 6% 63%;
+    --accent: 60 4% 24%;
+    --accent-foreground: 48 26% 95%;
+    --destructive: 0 55% 55%;
     --destructive-foreground: 0 0% 98%;
-    --success: 142 70% 45%;
-    --success-foreground: 240 10% 3.9%;
-    --warning: 38 92% 55%;
-    --warning-foreground: 240 10% 3.9%;
-    --border: 240 3.7% 15.9%;
-    --input: 240 3.7% 15.9%;
-    --ring: 240 4.9% 83.9%;
+    --success: 145 40% 55%;
+    --success-foreground: 150 30% 10%;
+    --warning: 38 80% 55%;
+    --warning-foreground: 38 30% 10%;
+    --border: 50 4% 24%;
+    --input: 50 4% 24%;
+    --ring: 15 66% 62%;
   }
 }
 

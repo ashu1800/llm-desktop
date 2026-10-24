@@ -53,17 +53,18 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
+// Claude 暖色系:陶土橘 + 橄榄绿 + 沙棕等(与主题主色一致)
 const PIE_COLORS = [
-  "#6366f1",
-  "#22c55e",
-  "#f59e0b",
-  "#06b6d4",
-  "#ec4899",
-  "#8b5cf6",
-  "#14b8a6",
-  "#ef4444",
-  "#84cc16",
-  "#64748b",
+  "#D97757",
+  "#8A9A5B",
+  "#D4A27F",
+  "#6A9BCC",
+  "#C2A878",
+  "#7D8A5C",
+  "#B5654A",
+  "#94A187",
+  "#D9B48F",
+  "#8B8B83",
 ];
 
 function trendLabel(ts: number, bucket: "hour" | "day"): string {
@@ -317,7 +318,7 @@ export function DashboardPage() {
                       yAxisId="count"
                       dataKey="count"
                       name="请求数"
-                      fill="#6366f1"
+                      fill="#D97757"
                       radius={[3, 3, 0, 0]}
                       maxBarSize={28}
                     />
@@ -326,7 +327,7 @@ export function DashboardPage() {
                       type="monotone"
                       dataKey="costYuan"
                       name="费用"
-                      stroke="#22c55e"
+                      stroke="#8A9A5B"
                       strokeWidth={2}
                       dot={false}
                     />
@@ -411,7 +412,7 @@ export function DashboardPage() {
                       tickLine={false}
                     />
                     <Tooltip />
-                    <Bar dataKey="count" name="请求数" fill="#6366f1" radius={[0, 3, 3, 0]} maxBarSize={18} />
+                    <Bar dataKey="count" name="请求数" fill="#D97757" radius={[0, 3, 3, 0]} maxBarSize={18} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>

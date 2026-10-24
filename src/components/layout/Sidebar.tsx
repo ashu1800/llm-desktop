@@ -33,7 +33,7 @@ interface SidebarProps {
 
 export function Sidebar({ page, onNavigate }: SidebarProps) {
   return (
-    <aside className="flex w-56 shrink-0 flex-col border-r bg-card">
+    <aside className="flex w-56 shrink-0 flex-col border-r bg-muted">
       <div className="flex h-14 items-center gap-2.5 border-b px-4">
         <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
           <Waypoints className="h-4 w-4" />

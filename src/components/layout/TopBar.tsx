@@ -56,7 +56,7 @@ export function TopBar({ page }: TopBarProps) {
   };
 
   return (
-    <header className="flex h-14 shrink-0 items-center gap-3 border-b bg-card px-4">
+    <header className="flex h-14 shrink-0 items-center gap-3 border-b bg-muted px-4">
       <h1 className="text-sm font-semibold">{PAGE_TITLES[page]}</h1>
       <div className="flex-1" />
       {/* 服务状态:绿=运行、灰=停止 */}
