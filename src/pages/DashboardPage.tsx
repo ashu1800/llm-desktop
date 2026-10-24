@@ -1,11 +1,7 @@
 import { useMemo, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Coins,
-  Loader2,
-  Play,
-  Square,
   Zap,
 } from "lucide-react";
 import {
@@ -23,13 +19,10 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { toast } from "sonner";
-import { api } from "@/lib/api";
 import {
   useBreakerStates,
   useChannelStats,
   useModelStats,
-  useServiceStatus,
   useStats,
   useTrend,
   useUnpricedModels,
@@ -43,7 +36,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -97,10 +89,8 @@ function StatCard({
 }
 
 export function DashboardPage() {
-  const { data: status } = useServiceStatus();
   const { data: breakers } = useBreakerStates();
   const { data: unpriced } = useUnpricedModels();
-  const qc = useQueryClient();
   const [range, setRange] = useState<TimeRange>("today");
   const [bucket, setBucket] = useState<"hour" | "day">("hour");
 
@@ -125,15 +115,6 @@ export function DashboardPage() {
     count,
     costYuan: cost / 100,
   }));
-
-  const toggleMutation = useMutation({
-    mutationFn: () => (status?.running ? api.stopService() : api.startService()),
-    onSuccess: (s) => {
-      qc.setQueryData(["service"], s);
-      toast.success(s.running ? "代理服务已启动" : "代理服务已停止");
-    },
-    onError: (e) => toast.error(String(e)),
-  });
 
   return (
     <div className="space-y-4">
@@ -169,104 +150,64 @@ export function DashboardPage() {
         </div>
       )}
 
-      {/* 服务 + 汇总卡片 */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>代理服务</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-2">
-              <span
-                className={cn(
-                  "h-2.5 w-2.5 rounded-full",
-                  status?.running ? "bg-success" : "bg-muted-foreground/40",
-                )}
-              />
-              <span className="text-lg font-semibold">
-                {status?.running ? "运行中" : "已停止"}
-              </span>
-            </div>
-            <div className="mt-1 font-mono text-xs text-muted-foreground">
-              {status?.addr ?? "未监听"}
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              className="mt-3"
-              disabled={toggleMutation.isPending}
-              onClick={() => toggleMutation.mutate()}
-            >
-              {toggleMutation.isPending ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : status?.running ? (
-                <Square className="h-3.5 w-3.5" />
-              ) : (
-                <Play className="h-3.5 w-3.5" />
-              )}
-              {status?.running ? "停止服务" : "启动服务"}
-            </Button>
-          </CardContent>
-        </Card>
+      {/* 统计范围(联动下方卡片与图表) */}
+      <div className="flex items-center justify-end gap-2">
+        <span className="text-xs text-muted-foreground">统计范围</span>
+        <Select
+          value={range}
+          onValueChange={(v) => setRange(v as TimeRange)}
+        >
+          <SelectTrigger className="h-8 w-[110px] text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {(Object.keys(TIME_RANGE_LABELS) as TimeRange[]).map((r) => (
+              <SelectItem key={r} value={r}>
+                {TIME_RANGE_LABELS[r]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* 汇总卡片:六张等宽,范围由上方筛选联动 */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+        <StatCard title="请求数" value={stats ? String(stats.count) : "—"} />
         <StatCard
-          title={`请求数(${TIME_RANGE_LABELS[range]})`}
-          value={stats ? String(stats.count) : "—"}
-        />
-        <StatCard
-          title={`总费用(${TIME_RANGE_LABELS[range]})`}
+          title="总费用"
           value={stats ? fmtYuan(stats.totalCost) : "—"}
         />
         <StatCard
-          title="平均首字 / 输出速度"
+          title="平均首字"
           value={
-            stats
-              ? `${stats.avgTtftMs != null ? fmtMs(stats.avgTtftMs) : "—"} · ${
-                  stats.avgSpeed != null ? `${stats.avgSpeed.toFixed(1)} tok/s` : "—"
-                }`
-              : "—"
+            stats && stats.avgTtftMs != null ? fmtMs(stats.avgTtftMs) : "—"
           }
-          hint="仅流式请求计入"
+          hint="仅流式计入"
         />
         <StatCard
-          title={`错误率(${TIME_RANGE_LABELS[range]})`}
+          title="输出速度"
+          value={
+            stats && stats.avgSpeed != null
+              ? `${stats.avgSpeed.toFixed(1)} tok/s`
+              : "—"
+          }
+          hint="仅流式计入"
+        />
+        <StatCard
+          title="错误率"
           value={errorRate}
           hint={stats ? `${stats.errorCount} 次失败` : undefined}
         />
         <StatCard
-          title="熔断中的渠道"
+          title="熔断渠道"
           value={String(openBreakers.length)}
-          hint={openBreakers.length > 0 ? "存在渠道故障,注意上游可用性" : "全部正常"}
+          hint={
+            openBreakers.length > 0 ? "请求将跳过这些渠道" : "全部正常"
+          }
         />
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>统计范围</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-col gap-2">
-              <Select
-                value={range}
-                onValueChange={(v) => setRange(v as TimeRange)}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {(Object.keys(TIME_RANGE_LABELS) as TimeRange[]).map((r) => (
-                    <SelectItem key={r} value={r}>
-                      {TIME_RANGE_LABELS[r]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                联动下方图表与汇总卡片
-              </p>
-            </div>
-          </CardContent>
-        </Card>
       </div>
 
-      {/* 图表 */}
+            {/* 图表 */}
       <div className="grid gap-4 xl:grid-cols-2">
         <Card className="xl:col-span-2">
           <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
