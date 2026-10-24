@@ -64,6 +64,7 @@ export const api = {
     invoke<LogDetail | null>("get_request_log", { id }),
   getStats: (filter: LogFilter) => invoke<StatsSummary>("get_stats", { filter }),
   clearLogs: () => invoke<void>("clear_logs"),
+  listClients: () => invoke<string[]>("list_clients"),
 
   // 配置导入导出
   exportConfig: () => invoke<string | null>("export_config"),
@@ -77,8 +78,8 @@ export const api = {
   recoverChannel: (id: number) => invoke<void>("recover_channel", { id }),
 };
 
-/** 掩码显示 API Key:sk-abc***xyz */
+/** 掩码显示 API Key:sk-abc***xyz;短串全掩码,防止 slice 泄露过半明文 */
 export function maskKey(key: string): string {
-  if (key.length <= 12) return key.slice(0, 4) + "***";
+  if (key.length <= 12) return "***";
   return `${key.slice(0, 8)}***${key.slice(-4)}`;
 }

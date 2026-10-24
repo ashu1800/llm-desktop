@@ -130,14 +130,16 @@ export function UpdateDialog({
   const [loadError, setLoadError] = useState(false);
 
   useEffect(() => {
-    if (!open) return;
+    // currentVersion 未就绪(getVersion 未 resolve)时以 "" 比对会把全部 release
+    // 误判为"更新":等版本就绪再拉取
+    if (!open || !state.currentVersion) return;
     setEntries(null);
     setLoadError(false);
-    fetchChangelog(state.currentVersion ?? "")
+    fetchChangelog(state.currentVersion)
       .then(setEntries)
       .catch(() => setLoadError(true));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, state.currentVersion]);
 
   const pct =
     state.total && state.total > 0

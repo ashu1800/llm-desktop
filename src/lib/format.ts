@@ -21,6 +21,31 @@ export function fmtMs(ms: number | null | undefined): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+/**
+ * 耗时分档着色:绿=快 → 蓝=正常 → 橙=偏慢 → 红=慢。
+ * thresholds 传三档上限(毫秒),如首字 [1000, 3000, 8000]。
+ *
+ * 阈值依据(2026-10 查证):
+ * - 首字:信通院 2025 年度监测国内大模型 TTFT 中位数 0.58s、76% <1s
+ *   (hs.china.com.cn/2026-02/11/content_43355245.html),GPT/Claude <0.5s;
+ *   AI Economics 旗舰 API 约 1.0~1.3s,聊天界面 P95 应 <2s。
+ *   → 绿 <1s = 优于行业中位;蓝 1~3s = 可接受(含中转/长上下文预填开销);
+ *     红 ≥8s = 明显异常。
+ * - 生成耗时(总耗时−首字):旗舰 API 输出速度 40~60 t/s、轻量 100+
+ *   (arXiv 2504.17999:GPT-4o ≈60 t/s)。5/15/60s 分档 ≈ 250/750/3000
+ *   token 输出;红 ≥60s 意味有效速度 <10 t/s——即 ITL >100ms 的明显卡顿区。
+ */
+export function latencyColor(
+  ms: number | null | undefined,
+  thresholds: [number, number, number],
+): string {
+  if (ms == null) return "";
+  if (ms < thresholds[0]) return "text-emerald-500";
+  if (ms < thresholds[1]) return "text-sky-500";
+  if (ms < thresholds[2]) return "text-amber-500";
+  return "text-red-500";
+}
+
 /** 时间戳 → HH:mm:ss(title 用完整日期) */
 export function fmtTime(ts: number): string {
   return new Date(ts).toLocaleTimeString("zh-CN", { hour12: false });

@@ -31,6 +31,7 @@ import {
   fmtMs,
   fmtTime,
   fmtYuan,
+  latencyColor,
   matchPrice,
   parseAttempts,
   rangeFromTs,
@@ -229,8 +230,14 @@ function LogDetailDialog({
               {detail.cost != null && price ? (
                 <div className="rounded-md border bg-muted/40 p-3 font-mono text-xs leading-6">
                   <div>
-                    输入 {fmtK(detail.promptTokens - detail.cacheRead - detail.cacheWrite)} ×{" "}
-                    {price.input} 元/M
+                    输入{" "}
+                    {fmtK(
+                      Math.max(
+                        0,
+                        detail.promptTokens - detail.cacheRead - detail.cacheWrite,
+                      ),
+                    )}{" "}
+                    × {price.input} 元/M
                   </div>
                   <div>
                     缓存读 {fmtK(detail.cacheRead)} × {price.cacheRead} 元/M + 缓存写{" "}
@@ -312,12 +319,20 @@ function StatusCell({ status }: { status: number }) {
 
 function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
   const attemptCount = parseAttempts(l.attempts).length;
+  // 客户端映射:设置里配置的别名与 emoji 图标;未配置走原名
+  const clientAlias = useAppStore(
+    (s) => (l.client && s.clientAliases[l.client]) || null,
+  );
+  const clientIcon = useAppStore(
+    (s) => (l.client && s.clientIcons[l.client]) || null,
+  );
+  const clientDisplay = clientAlias ?? l.client;
   return (
     <tr className="border-b text-center last:border-0 hover:bg-accent/30">
-      <td className="py-2.5 pr-3 font-mono text-xs" title={fmtFullTime(l.ts)}>
+      <td className="py-1.5 pr-3 font-mono text-xs" title={fmtFullTime(l.ts)}>
         {fmtTime(l.ts)}
       </td>
-      <td className="py-2.5 pr-3">
+      <td className="py-1.5 pr-3">
         <div className="inline-flex items-center gap-1.5">
           <Badge variant="secondary" className="max-w-[180px] truncate px-1.5 font-mono">
             {l.model}
@@ -325,7 +340,7 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
           {l.tag && <Badge variant="outline" className="px-1.5">{l.tag}</Badge>}
         </div>
       </td>
-      <td className="py-2.5 pr-3 text-xs">
+      <td className="py-1.5 pr-3 text-sm">
         <span className="inline-flex items-center gap-1">
           <span className="h-1.5 w-1.5 rounded-full bg-primary/60" />
           {l.channelName ?? "—"}
@@ -336,10 +351,14 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
           )}
         </span>
       </td>
-      <td className="py-2.5 pr-3 font-mono text-xs leading-5">
+      <td className="py-1.5 pr-3 font-mono text-xs leading-5">
         <div className="flex items-center justify-center gap-2.5">
-          <span className="text-orange-500" title={`总输入 ${fmtK(l.promptTokens)}(含缓存)`}>
-            ↑{fmtK(l.promptTokens - l.cacheRead - l.cacheWrite)}
+          <span
+            className="text-orange-500"
+            title={`总输入 ${fmtK(l.promptTokens)}(含缓存)`}
+          >
+            {/* 差值夹 0:上游 usage 可能出现 prompt < cache_read+write 的异常数据 */}
+            ↑{fmtK(Math.max(0, l.promptTokens - l.cacheRead - l.cacheWrite))}
           </span>
           <span className="text-violet-500" title={`总输出 ${fmtK(l.completionTokens)}`}>
             ↓{fmtK(l.completionTokens)}
@@ -350,34 +369,46 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
           <span className="text-emerald-500" title="缓存命中词元">
             {fmtK(l.cacheRead)}
           </span>
-          <span className="text-violet-500">
+          <span className="text-sky-500">
             {cacheHitRate(l.cacheRead, l.promptTokens)}
           </span>
         </div>
       </td>
-      {/* 任务耗时:单元格保持左对齐,竖条锚点行参差不出缩进;流式正常色,非流式整块淡色 */}
-      <td className={cn("py-2.5 pr-3 text-left font-mono text-xs leading-5", !l.isStream && "text-muted-foreground")}>
-        <div className="space-y-0.5">
+      {/* 任务耗时:单元格保持左对齐;首字/生成耗时按快慢分档着色;非流式整块淡色 */}
+      <td className={cn("py-1.5 pr-3 text-left font-mono text-xs leading-4", !l.isStream && "text-muted-foreground")}>
+        <div>
           <div className="flex items-center gap-1.5">
             <span className="h-3 w-0.5 shrink-0 rounded-full bg-zinc-400" />
             <span className="text-muted-foreground">首字</span>
-            <span>{l.isStream ? fmtMs(l.ttftMs) : "—"}</span>
+            <span className={latencyColor(l.ttftMs, [1000, 3000, 8000])}>
+              {l.isStream ? fmtMs(l.ttftMs) : "—"}
+            </span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className="h-3 w-0.5 shrink-0 rounded-full bg-sky-500" />
             <span className="text-muted-foreground">耗时</span>
-            <span>{fmtMs(l.totalMs)}</span>
+            {/* 评估生成耗时 = 总耗时 − 首字(流式,夹 0);非流式无首字概念,直接评总耗时 */}
+            <span
+              className={latencyColor(
+                l.isStream && l.ttftMs != null
+                  ? Math.max(0, (l.totalMs ?? 0) - l.ttftMs)
+                  : l.totalMs,
+                [5000, 15000, 60000],
+              )}
+            >
+              {fmtMs(l.totalMs)}
+            </span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className="h-3 w-0.5 shrink-0 rounded-full bg-violet-500" />
             <span className="text-muted-foreground">速度</span>
             <span>
-              {l.isStream && l.speed != null ? `${l.speed.toFixed(1)} tok/s` : "—"}
+              {l.isStream && l.speed != null ? l.speed.toFixed(1) : "—"}
             </span>
           </div>
         </div>
       </td>
-      <td className="py-2.5 pr-3 font-mono text-xs">
+      <td className="py-1.5 pr-3 font-mono text-xs">
         {l.cost != null && (
           <span title={l.estimated ? "usage 为本地估算" : undefined}>
             {l.estimated ? "~" : ""}
@@ -386,10 +417,10 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
         )}
         {l.cost == null && <span className="text-muted-foreground">—</span>}
       </td>
-      <td className="py-2.5 pr-3">
+      <td className="py-1.5 pr-3">
         <StatusCell status={l.status} />
       </td>
-      <td className="py-2.5 pr-3">
+      <td className="py-1.5 pr-3">
         {l.keyName ? (
           <Badge variant="outline" className="px-1.5">
             {l.keyName}
@@ -398,10 +429,20 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
           <span className="text-muted-foreground">—</span>
         )}
       </td>
-      <td className="max-w-[110px] truncate py-2.5 pr-3 text-xs text-muted-foreground">
-        {l.client ?? "—"}
+      <td
+        className="max-w-[110px] truncate py-1.5 pr-3 text-xs text-muted-foreground"
+        title={l.client ?? undefined}
+      >
+        {clientDisplay ? (
+          <span className="inline-flex items-center gap-1">
+            {clientIcon && <span className="text-sm leading-none">{clientIcon}</span>}
+            <span className="truncate">{clientDisplay}</span>
+          </span>
+        ) : (
+          "—"
+        )}
       </td>
-      <td className="py-2.5">
+      <td className="py-1.5">
         <Button variant="ghost" size="sm" onClick={onDetail}>
           详情
         </Button>
@@ -444,6 +485,8 @@ export function DashboardPage() {
   const { data, isLoading, isFetching } = useLogs(filter);
   const [items, total] = data ?? [[], 0];
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  // 日志清理/筛选结果变少后 total 缩水:把当前页收敛进有效范围,避免空页/越界页码
+  const safePage = Math.min(page, pageCount - 1);
 
   const openBreakers = (breakers ?? []).filter((b) => b.state !== "closed");
   const successRate =
@@ -454,7 +497,8 @@ export function DashboardPage() {
   const resetPage = () => setPage(0);
 
   return (
-    <div className="space-y-4">
+    // flex 列布局:日志卡片 flex-1 弹性占满剩余视口高度,底部不留空白
+    <div className="flex h-full flex-col gap-4">
       {/* 告警条 */}
       {(openBreakers.length > 0 || (unpriced?.length ?? 0) > 0) && (
         <div className="space-y-2">
@@ -603,8 +647,8 @@ export function DashboardPage() {
         />
       </div>
 
-      {/* 请求日志表(原"请求日志"页并入) */}
-      <Card>
+      {/* 请求日志表(原"请求日志"页并入);min-h-0 允许 flex 收缩,内滚容器占满剩余高度 */}
+      <Card className="flex min-h-0 flex-1 flex-col">
         <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
           <div>
             <CardTitle className="text-base">请求日志</CardTitle>
@@ -630,24 +674,24 @@ export function DashboardPage() {
             <Button
               variant="outline"
               size="sm"
-              disabled={page === 0}
-              onClick={() => setPage(page - 1)}
+              disabled={safePage === 0}
+              onClick={() => setPage(Math.min(page, pageCount - 1) - 1)}
             >
               <ChevronLeft className="h-3.5 w-3.5" />
             </Button>
-            {page + 1} / {pageCount}
+            {safePage + 1} / {pageCount}
             <Button
               variant="outline"
               size="sm"
-              disabled={page + 1 >= pageCount}
-              onClick={() => setPage(page + 1)}
+              disabled={safePage + 1 >= pageCount}
+              onClick={() => setPage(Math.min(page, pageCount - 1) + 1)}
             >
               <ChevronRight className="h-3.5 w-3.5" />
             </Button>
           </div>
         </CardHeader>
-        {/* 限高内滚:日志多时表头 sticky 钉住,不随页面滚动 */}
-        <CardContent className="max-h-[calc(100vh-420px)] min-h-[240px] overflow-auto">
+        {/* 内滚容器撑满卡片剩余空间:表头 sticky 钉住,底部与卡片边缘贴合 */}
+        <CardContent className="min-h-0 flex-1 overflow-auto">
           {isLoading ? (
             <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" /> 加载中…

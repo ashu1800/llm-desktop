@@ -106,9 +106,13 @@ function KeyDialog({
   const { data: channels } = useChannels();
   const [form, setForm] = useState<ApiKey | null>(editing);
   const [creating, setCreating] = useState(false);
+  const [plaintext, setPlaintext] = useState(false);
   useEffect(() => {
     setForm(editing);
     setCreating(editing?.id === 0);
+    // 必须随 editing 重置:否则创建成功(plaintext=true)后,再打开任何对话框
+    // 都会以"明文屏"渲染出密钥完整明文(敏感信息泄露)
+    setPlaintext(false);
   }, [editing]);
 
   const saveMutation = useMutation({
@@ -136,7 +140,6 @@ function KeyDialog({
     onError: (e) => toast.error(String(e)),
   });
 
-  const [plaintext, setPlaintext] = useState(false);
   if (!form) return null;
   const patch = (p: Partial<ApiKey>) => setForm({ ...form, ...p });
   const selected = new Set(form.channels);
@@ -373,8 +376,12 @@ export function KeysPage() {
                         className="flex items-center gap-1 font-mono text-xs text-muted-foreground hover:text-foreground"
                         title="复制完整密钥"
                         onClick={async () => {
-                          await navigator.clipboard.writeText(k.key);
-                          toast.success("完整密钥已复制");
+                          try {
+                            await navigator.clipboard.writeText(k.key);
+                            toast.success("完整密钥已复制");
+                          } catch {
+                            toast.error("复制失败,请手动选择复制");
+                          }
                         }}
                       >
                         {maskKey(k.key)}
@@ -405,8 +412,12 @@ export function KeysPage() {
                           size="icon"
                           title={k.enabled ? "禁用" : "启用"}
                           onClick={async () => {
-                            await api.setApiKeyEnabled(k.id, !k.enabled);
-                            refresh();
+                            try {
+                              await api.setApiKeyEnabled(k.id, !k.enabled);
+                              refresh();
+                            } catch (e) {
+                              toast.error(String(e));
+                            }
                           }}
                         >
                           <Power className="h-3.5 w-3.5" />
@@ -427,9 +438,19 @@ export function KeysPage() {
                           size="icon"
                           title="删除"
                           onClick={async () => {
-                            await api.deleteApiKey(k.id);
-                            refresh();
-                            toast.success("已删除(历史日志保留)");
+                            if (
+                              !window.confirm(
+                                `确认删除密钥「${k.name}」?使用该密钥的客户端将立即无法访问,且不可恢复。`,
+                              )
+                            )
+                              return;
+                            try {
+                              await api.deleteApiKey(k.id);
+                              refresh();
+                              toast.success("已删除(历史日志保留)");
+                            } catch (e) {
+                              toast.error(String(e));
+                            }
                           }}
                         >
                           <Trash2 className="h-3.5 w-3.5" />

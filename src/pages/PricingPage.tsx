@@ -337,9 +337,20 @@ export function PricingPage() {
                           size="icon"
                           title="删除"
                           onClick={async () => {
-                            await api.deleteModelPrice(p.pattern);
-                            qc.invalidateQueries({ queryKey: ["prices"] });
-                            toast.success("已删除定价");
+                            // 删除后相关模型请求不再计费:二次确认
+                            if (
+                              !window.confirm(
+                                `确认删除定价「${p.pattern}」?相关请求将不再计入费用。`,
+                              )
+                            )
+                              return;
+                            try {
+                              await api.deleteModelPrice(p.pattern);
+                              qc.invalidateQueries({ queryKey: ["prices"] });
+                              toast.success("已删除定价");
+                            } catch (e) {
+                              toast.error(String(e));
+                            }
                           }}
                         >
                           <Trash2 className="h-3.5 w-3.5" />

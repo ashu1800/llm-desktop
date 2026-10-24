@@ -11,6 +11,10 @@ interface AppStore {
   /** 请求日志实时同步开关:关闭时忽略后端 requestLogged 事件 */
   logsLive: boolean;
   setLogsLive: (v: boolean) => void;
+  /** 客户端映射(来自 settings,设置保存时同步):显示名与 emoji 图标 */
+  clientAliases: Record<string, string>;
+  clientIcons: Record<string, string>;
+  setClientMapping: (aliases: Record<string, string>, icons: Record<string, string>) => void;
 }
 
 export const useAppStore = create<AppStore>((set) => ({
@@ -20,6 +24,10 @@ export const useAppStore = create<AppStore>((set) => ({
   setResolvedTheme: (resolvedTheme) => set({ resolvedTheme }),
   logsLive: true,
   setLogsLive: (logsLive) => set({ logsLive }),
+  clientAliases: {},
+  clientIcons: {},
+  setClientMapping: (clientAliases, clientIcons) =>
+    set({ clientAliases, clientIcons }),
 }));
 
 export function themeLabel(mode: ThemeMode): string {

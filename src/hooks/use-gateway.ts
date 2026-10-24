@@ -66,7 +66,16 @@ export function useGatewayEvents() {
   const qc = useQueryClient();
   // live 经 ref 透传:监听器只注册一次,开关变化不重挂、不丢事件
   const liveRef = useRef(true);
+  const prevLiveRef = useRef(true);
+  prevLiveRef.current = liveRef.current;
   liveRef.current = useAppStore((s) => s.logsLive);
+  // 暂停期间落库的事件已错过:恢复开关时补拉一次,消除"假死"窗口
+  useEffect(() => {
+    if (liveRef.current && !prevLiveRef.current) {
+      qc.invalidateQueries({ queryKey: ["logs"] });
+      qc.invalidateQueries({ queryKey: ["stats"] });
+    }
+  });
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
@@ -85,7 +94,14 @@ export function useGatewayEvents() {
       } else if (event.type === "requestLogged" && liveRef.current) {
         clearTimeout(logDebounce);
         logDebounce = setTimeout(() => {
-          qc.invalidateQueries({ queryKey: ["logs"] });
+          // 仅刷新第 1 页(offset=0):浏览历史页时新请求落库不扰动当前视图
+          qc.invalidateQueries({
+            queryKey: ["logs"],
+            predicate: (q) => {
+              const f = q.queryKey[1] as LogFilter | undefined;
+              return !f || (f.offset ?? 0) === 0;
+            },
+          });
           qc.invalidateQueries({ queryKey: ["stats"] });
         }, 300);
       }
@@ -101,10 +117,16 @@ export function useGatewayEvents() {
   }, [qc]);
 }
 
-/** 把 settings.theme 应用到 <html class="dark">,并解析出实际主题 */
+/** 把 settings.theme 应用到 <html class="dark">,并解析出实际主题;同步客户端映射到 store */
 export function useThemeEffect() {
   const { data: settings } = useSettings();
   const setResolvedTheme = useAppStoreSetResolved();
+  const setClientMapping = useAppStore((s) => s.setClientMapping);
+  useEffect(() => {
+    if (settings) {
+      setClientMapping(settings.clientAliases ?? {}, settings.clientIcons ?? {});
+    }
+  }, [settings, setClientMapping]);
   useEffect(() => {
     const mode = settings?.theme ?? "system";
     const mq = window.matchMedia("(prefers-color-scheme: dark)");

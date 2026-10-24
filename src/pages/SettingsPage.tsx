@@ -5,7 +5,9 @@ import { AlertTriangle, Save } from "lucide-react";
 import { api } from "@/lib/api";
 import { useSettings } from "@/hooks/use-gateway";
 import { useUpdater } from "@/hooks/use-updater";
+import { ClientMappingSettings } from "@/components/ClientMappingSettings";
 import type { AppSettings, ImportPreview, ThemeMode } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import {
   Card,
   CardContent,
@@ -48,14 +50,24 @@ function NumberField({
   onChange: (v: number) => void;
   suffix?: string;
 }) {
+  // 暂存原始输入串:受控 number 输入下 Number("") === 0 会把"清空"变成写入 0
+  // (端口 0 → 后端静默回 8787;保留天数 0 → 清日志风险),中间态 "0." 也被折叠
+  const [raw, setRaw] = useState<string | null>(null);
+  const display = raw ?? (Number.isFinite(value) ? String(value) : "");
   return (
     <div className="space-y-1.5">
       <Label>{label}</Label>
       <div className="flex items-center gap-2">
         <Input
           type="number"
-          value={Number.isFinite(value) ? value : ""}
-          onChange={(e) => onChange(Number(e.target.value))}
+          value={display}
+          onChange={(e) => {
+            setRaw(e.target.value);
+            const n = Number(e.target.value);
+            // 合法数值才写回 form;清空/非法保持旧值,保存时由后端钳制
+            if (e.target.value !== "" && Number.isFinite(n)) onChange(n);
+          }}
+          onBlur={() => setRaw(null)} // 失焦回到显示 form 实际值
           className="w-28"
         />
         {suffix && (
@@ -111,6 +123,17 @@ function SectionCard({
 
 // ---------- 设置页 ----------
 
+/** 设置分类:分夹切换展示 */
+const SETTING_TABS = [
+  { key: "gateway", label: "服务与网关" },
+  { key: "app", label: "应用" },
+  { key: "client", label: "客户端映射" },
+  { key: "data", label: "日志与数据" },
+  { key: "about", label: "关于" },
+] as const;
+
+type SettingTab = (typeof SETTING_TABS)[number]["key"];
+
 export function SettingsPage() {
   const { data: settings, isLoading } = useSettings();
   const qc = useQueryClient();
@@ -122,6 +145,20 @@ export function SettingsPage() {
     preview: ImportPreview;
   } | null>(null);
   const [clearLogsOpen, setClearLogsOpen] = useState(false);
+  const [tab, setTab] = useState<SettingTab>("gateway");
+  // dirty 基准 = 本地表单快照,而非服务端实时值:
+  // settings 会被外部修改(顶栏主题/导入配置/settingsChanged),若直接与
+  // settings 比较,外部变更会被误报为"未保存修改",点保存会回滚它们
+  const [baseSnapshot, setBaseSnapshot] = useState<string | null>(null);
+
+  useEffect(() => {
+    // settings 重取且表单无本地修改时跟随刷新;有修改则保留用户输入
+    if (settings && !dirty) {
+      setForm(structuredClone(settings));
+      setBaseSnapshot(JSON.stringify(settings));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings]);
 
   const exportMut = useMutation({
     mutationFn: api.exportConfig,
@@ -167,12 +204,7 @@ export function SettingsPage() {
     relaunchToUpdate,
   } = useUpdater();
 
-  useEffect(() => {
-    if (settings && !form) setForm(structuredClone(settings));
-  }, [settings, form]);
-
-  const dirty =
-    !!form && !!settings && JSON.stringify(form) !== JSON.stringify(settings);
+  const dirty = !!form && baseSnapshot !== JSON.stringify(form);
 
   const patch = (p: Partial<AppSettings>) =>
     setForm((f) => (f ? { ...f, ...p } : f));
@@ -187,6 +219,7 @@ export function SettingsPage() {
     try {
       const updated = await api.updateSettings(form);
       setForm(structuredClone(updated));
+      setBaseSnapshot(JSON.stringify(updated));
       qc.invalidateQueries({ queryKey: ["settings"] });
       toast.success("设置已保存并生效");
     } catch (e) {
@@ -219,287 +252,330 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6 pb-16">
-      <SectionCard
-        title="服务监听"
-        description="数据面 axum 服务配置;修改端口保存后立即热重启监听,无需重启应用。"
-      >
-        <div className="grid gap-4 sm:grid-cols-2">
-          <NumberField
-            label="端口"
-            value={form.port}
-            onChange={(v) => patch({ port: v })}
-            desc="保存前自动检测占用,冲突将拒绝保存"
-          />
-          <div className="space-y-1.5">
-            <Label>监听地址</Label>
-            <Select
-              value={form.listenAddr}
-              onValueChange={(v) => patch({ listenAddr: v })}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="127.0.0.1">127.0.0.1(仅本机)</SelectItem>
-                <SelectItem value="0.0.0.0">0.0.0.0(局域网可访问)</SelectItem>
-              </SelectContent>
-            </Select>
-            {form.listenAddr === "0.0.0.0" && (
-              <p className="flex items-start gap-1.5 text-xs text-warning">
-                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                密钥将暴露给局域网,保存时需二次确认;Windows
-                首次监听会弹出防火墙授权,请选择"允许"。
-              </p>
+    <div className="mx-auto max-w-3xl pb-16">
+      {/* 分类选择夹 */}
+      <div className="mb-5 flex items-center gap-1 rounded-lg border bg-card p-1">
+        {SETTING_TABS.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={cn(
+              "flex-1 rounded-md px-3 py-1.5 text-sm transition-colors",
+              tab === t.key
+                ? "bg-primary font-medium text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground",
             )}
-          </div>
-        </div>
-      </SectionCard>
-
-      <SectionCard title="系统集成">
-        <ToggleField
-          label="开机自启"
-          desc="写入注册表 Run 项,启动参数附带 --silent(强制静默进托盘)"
-          checked={form.autostart}
-          onChange={(v) => patch({ autostart: v })}
-        />
-        <ToggleField
-          label="启动时最小化到托盘"
-          desc="启动不弹窗口,仅托盘运行"
-          checked={form.silentStart}
-          onChange={(v) => patch({ silentStart: v })}
-        />
-        <ToggleField
-          label="关闭窗口时隐藏到托盘"
-          desc="关闭 = 隐藏并保持代理运行;关闭后代理服务继续转发请求。关闭此开关则点关闭按钮直接退出程序"
-          checked={form.closeToTray}
-          onChange={(v) => patch({ closeToTray: v })}
-        />
-      </SectionCard>
-
-      <SectionCard title="日志">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <NumberField
-            label="日志保留天数"
-            value={form.logRetentionDays}
-            onChange={(v) => patch({ logRetentionDays: v })}
-            suffix="天"
-            desc="每日凌晨自动清理过期日志"
-          />
-          <div className="space-y-1.5">
-            <Label>完整报文保存</Label>
-            <ToggleField
-              label="保存完整请求/响应体"
-              desc="默认各截断 32KB;开启后完整保存(占用更多磁盘)"
-              checked={form.saveFullBody}
-              onChange={(v) => patch({ saveFullBody: v })}
-            />
-          </div>
-        </div>
-      </SectionCard>
-
-      <SectionCard
-        title="熔断全局默认参数"
-        description="渠道可单独覆盖;滑动窗口内连续失败达到阈值,或样本足够且失败率超阈值时熔断打开。"
-      >
-        <div className="grid gap-4 sm:grid-cols-3">
-          <NumberField
-            label="滑动窗口"
-            value={form.breaker.windowSecs}
-            onChange={(v) => patchBreaker({ windowSecs: v })}
-            suffix="秒"
-          />
-          <NumberField
-            label="连续失败阈值"
-            value={form.breaker.consecutiveFailures}
-            onChange={(v) => patchBreaker({ consecutiveFailures: v })}
-            suffix="次"
-          />
-          <NumberField
-            label="最小样本数"
-            value={form.breaker.sampleMin}
-            onChange={(v) => patchBreaker({ sampleMin: v })}
-            suffix="条"
-          />
-          <NumberField
-            label="失败率阈值"
-            value={Math.round(form.breaker.failureRate * 100)}
-            onChange={(v) => patchBreaker({ failureRate: v / 100 })}
-            suffix="%"
-          />
-          <NumberField
-            label="冷却期"
-            value={form.breaker.cooldownSecs}
-            onChange={(v) => patchBreaker({ cooldownSecs: v })}
-            suffix="秒"
-            desc="连续熔断按 60→120→240 指数退避"
-          />
-          <NumberField
-            label="退避上限"
-            value={form.breaker.backoffMaxSecs}
-            onChange={(v) => patchBreaker({ backoffMaxSecs: v })}
-            suffix="秒"
-          />
-        </div>
-      </SectionCard>
-
-      <SectionCard
-        title="超时默认值"
-        description="流式请求不设总时长硬顶,仅用空闲超时判定死亡;慢渠道请在渠道级调大首字超时。"
-      >
-        <div className="grid gap-4 sm:grid-cols-4">
-          <NumberField
-            label="连接"
-            value={form.timeouts.connectSecs}
-            onChange={(v) => patchTimeouts({ connectSecs: v })}
-            suffix="秒"
-          />
-          <NumberField
-            label="首字 TTFT"
-            value={form.timeouts.ttftSecs}
-            onChange={(v) => patchTimeouts({ ttftSecs: v })}
-            suffix="秒"
-          />
-          <NumberField
-            label="流式空闲"
-            value={form.timeouts.streamIdleSecs}
-            onChange={(v) => patchTimeouts({ streamIdleSecs: v })}
-            suffix="秒"
-          />
-          <NumberField
-            label="非流式总时长"
-            value={form.timeouts.nonStreamTotalSecs}
-            onChange={(v) => patchTimeouts({ nonStreamTotalSecs: v })}
-            suffix="秒"
-          />
-        </div>
-      </SectionCard>
-
-      <SectionCard title="外观">
-        <div className="max-w-xs space-y-1.5">
-          <Label>主题</Label>
-          <Select
-            value={form.theme}
-            onValueChange={(v) => patch({ theme: v as ThemeMode })}
           >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="system">跟随系统</SelectItem>
-              <SelectItem value="light">浅色</SelectItem>
-              <SelectItem value="dark">深色</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      </SectionCard>
+            {t.label}
+          </button>
+        ))}
+      </div>
 
-      <SectionCard
-        title="软件更新"
-        description="检查 GitHub Releases 上的新版本;下载后经 minisign 签名校验安装,重启即完成更新。"
-      >
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="text-sm">
-              <span className="text-muted-foreground">当前版本 </span>
-              <span className="font-mono">{update.currentVersion ?? "—"}</span>
-              {update.phase === "available" && (
-                <span className="ml-3 text-success">
-                  发现新版本 v{update.nextVersion}
-                </span>
-              )}
-              {update.phase === "uptodate" && (
-                <span className="ml-3 text-muted-foreground">已是最新版本</span>
-              )}
-              {update.phase === "error" && (
-                <span className="ml-3 text-destructive">{update.error}</span>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              {update.phase === "ready" ? (
-                <Button size="sm" onClick={relaunchToUpdate}>
-                  重启应用完成更新
-                </Button>
-              ) : update.phase === "available" ||
-                (update.phase === "error" && update.pendingUpdate) ? (
-                <Button size="sm" onClick={downloadAndInstall}>
-                  {update.phase === "error" ? "重试下载" : "下载并安装"}
-                </Button>
-              ) : (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={update.phase === "checking"}
-                  onClick={checkForUpdate}
-                >
-                  {update.phase === "checking"
-                    ? "检查中…"
-                    : update.phase === "error"
-                      ? "重新检查"
-                      : "检查更新"}
-                </Button>
-              )}
-            </div>
-          </div>
-          {update.phase === "downloading" && (
-            <div className="space-y-1.5">
-              <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                <div
-                  className="h-full rounded-full bg-primary transition-all"
-                  style={{
-                    width:
-                      update.total && update.total > 0
-                        ? `${Math.min(100, (update.downloaded / update.total) * 100)}%`
-                        : "100%",
-                  }}
+      <div className="space-y-6">
+        {tab === "gateway" && (
+          <>
+            <SectionCard
+              title="服务监听"
+              description="数据面 axum 服务配置;修改端口保存后立即热重启监听,无需重启应用。"
+            >
+              <div className="grid gap-4 sm:grid-cols-2">
+                <NumberField
+                  label="端口"
+                  value={form.port}
+                  onChange={(v) => patch({ port: v })}
+                  desc="保存前自动检测占用,冲突将拒绝保存"
+                />
+                <div className="space-y-1.5">
+                  <Label>监听地址</Label>
+                  <Select
+                    value={form.listenAddr}
+                    onValueChange={(v) => patch({ listenAddr: v })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="127.0.0.1">127.0.0.1(仅本机)</SelectItem>
+                      <SelectItem value="0.0.0.0">0.0.0.0(局域网可访问)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {form.listenAddr === "0.0.0.0" && (
+                    <p className="flex items-start gap-1.5 text-xs text-warning">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      密钥将暴露给局域网,保存时需二次确认;Windows
+                      首次监听会弹出防火墙授权,请选择"允许"。
+                    </p>
+                  )}
+                </div>
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              title="熔断全局默认参数"
+              description="渠道可单独覆盖;滑动窗口内连续失败达到阈值,或样本足够且失败率超阈值时熔断打开。"
+            >
+              <div className="grid gap-4 sm:grid-cols-3">
+                <NumberField
+                  label="滑动窗口"
+                  value={form.breaker.windowSecs}
+                  onChange={(v) => patchBreaker({ windowSecs: v })}
+                  suffix="秒"
+                />
+                <NumberField
+                  label="连续失败阈值"
+                  value={form.breaker.consecutiveFailures}
+                  onChange={(v) => patchBreaker({ consecutiveFailures: v })}
+                  suffix="次"
+                />
+                <NumberField
+                  label="最小样本数"
+                  value={form.breaker.sampleMin}
+                  onChange={(v) => patchBreaker({ sampleMin: v })}
+                  suffix="条"
+                />
+                <NumberField
+                  label="失败率阈值"
+                  value={Math.round(form.breaker.failureRate * 100)}
+                  onChange={(v) => patchBreaker({ failureRate: v / 100 })}
+                  suffix="%"
+                />
+                <NumberField
+                  label="冷却期"
+                  value={form.breaker.cooldownSecs}
+                  onChange={(v) => patchBreaker({ cooldownSecs: v })}
+                  suffix="秒"
+                  desc="连续熔断按 60→120→240 指数退避"
+                />
+                <NumberField
+                  label="退避上限"
+                  value={form.breaker.backoffMaxSecs}
+                  onChange={(v) => patchBreaker({ backoffMaxSecs: v })}
+                  suffix="秒"
                 />
               </div>
-              <p className="text-xs text-muted-foreground">
-                {update.total
-                  ? `${(update.downloaded / 1024 / 1024).toFixed(1)} / ${(update.total / 1024 / 1024).toFixed(1)} MB`
-                  : `${(update.downloaded / 1024 / 1024).toFixed(1)} MB`}
-              </p>
+            </SectionCard>
+
+            <SectionCard
+              title="超时默认值"
+              description="流式请求不设总时长硬顶,仅用空闲超时判定死亡;慢渠道请在渠道级调大首字超时。"
+            >
+              <div className="grid gap-4 sm:grid-cols-4">
+                <NumberField
+                  label="连接"
+                  value={form.timeouts.connectSecs}
+                  onChange={(v) => patchTimeouts({ connectSecs: v })}
+                  suffix="秒"
+                />
+                <NumberField
+                  label="首字 TTFT"
+                  value={form.timeouts.ttftSecs}
+                  onChange={(v) => patchTimeouts({ ttftSecs: v })}
+                  suffix="秒"
+                />
+                <NumberField
+                  label="流式空闲"
+                  value={form.timeouts.streamIdleSecs}
+                  onChange={(v) => patchTimeouts({ streamIdleSecs: v })}
+                  suffix="秒"
+                />
+                <NumberField
+                  label="非流式总时长"
+                  value={form.timeouts.nonStreamTotalSecs}
+                  onChange={(v) => patchTimeouts({ nonStreamTotalSecs: v })}
+                  suffix="秒"
+                />
+              </div>
+            </SectionCard>
+          </>
+        )}
+
+        {tab === "app" && (
+          <>
+            <SectionCard title="系统集成">
+              <ToggleField
+                label="开机自启"
+                desc="写入注册表 Run 项,启动参数附带 --silent(强制静默进托盘)"
+                checked={form.autostart}
+                onChange={(v) => patch({ autostart: v })}
+              />
+              <ToggleField
+                label="启动时最小化到托盘"
+                desc="启动不弹窗口,仅托盘运行"
+                checked={form.silentStart}
+                onChange={(v) => patch({ silentStart: v })}
+              />
+              <ToggleField
+                label="关闭窗口时隐藏到托盘"
+                desc="关闭 = 隐藏并保持代理运行;关闭后代理服务继续转发请求。关闭此开关则点关闭按钮直接退出程序"
+                checked={form.closeToTray}
+                onChange={(v) => patch({ closeToTray: v })}
+              />
+            </SectionCard>
+
+            <SectionCard title="外观">
+              <div className="max-w-xs space-y-1.5">
+                <Label>主题</Label>
+                <Select
+                  value={form.theme}
+                  onValueChange={(v) => patch({ theme: v as ThemeMode })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="system">跟随系统</SelectItem>
+                    <SelectItem value="light">浅色</SelectItem>
+                    <SelectItem value="dark">深色</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </SectionCard>
+          </>
+        )}
+
+        {tab === "client" && (
+          <SectionCard
+            title="客户端映射"
+            description="自定义请求日志中客户端的显示名称与图标。"
+          >
+            <ClientMappingSettings form={form} patch={patch} />
+          </SectionCard>
+        )}
+
+        {tab === "data" && (
+          <>
+            <SectionCard title="日志">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <NumberField
+                  label="日志保留天数"
+                  value={form.logRetentionDays}
+                  onChange={(v) => patch({ logRetentionDays: v })}
+                  suffix="天"
+                  desc="每日凌晨自动清理过期日志"
+                />
+                <div className="space-y-1.5">
+                  <Label>完整报文保存</Label>
+                  <ToggleField
+                    label="保存完整请求/响应体"
+                    desc="默认各截断 32KB;开启后完整保存(占用更多磁盘)"
+                    checked={form.saveFullBody}
+                    onChange={(v) => patch({ saveFullBody: v })}
+                  />
+                </div>
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              title="配置导入 / 导出"
+              description="导出 JSON(渠道 + 密钥 + 定价 + 设置,含明文密钥,请妥善保管;日志不导出)。导入为整表替换并立即热生效。"
+            >
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  disabled={exportMut.isPending}
+                  onClick={() => exportMut.mutate()}
+                >
+                  导出配置
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={importPreviewMut.isPending || importApplyMut.isPending}
+                  onClick={() => importPreviewMut.mutate()}
+                >
+                  导入配置
+                </Button>
+                <Button
+                  variant="destructive"
+                  disabled={clearLogsMut.isPending}
+                  onClick={() => setClearLogsOpen(true)}
+                >
+                  清空日志
+                </Button>
+              </div>
+            </SectionCard>
+          </>
+        )}
+
+        {tab === "about" && (
+          <SectionCard
+            title="软件更新"
+            description="检查 GitHub Releases 上的新版本;下载后经 minisign 签名校验安装,重启即完成更新。"
+          >
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="text-sm">
+                  <span className="text-muted-foreground">当前版本 </span>
+                  <span className="font-mono">{update.currentVersion ?? "—"}</span>
+                  {update.phase === "available" && (
+                    <span className="ml-3 text-success">
+                      发现新版本 v{update.nextVersion}
+                    </span>
+                  )}
+                  {update.phase === "uptodate" && (
+                    <span className="ml-3 text-muted-foreground">已是最新版本</span>
+                  )}
+                  {update.phase === "error" && (
+                    <span className="ml-3 text-destructive">{update.error}</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {update.phase === "ready" ? (
+                    <Button size="sm" onClick={relaunchToUpdate}>
+                      重启应用完成更新
+                    </Button>
+                  ) : update.phase === "available" ||
+                    (update.phase === "error" && update.pendingUpdate) ? (
+                    <Button size="sm" onClick={downloadAndInstall}>
+                      {update.phase === "error" ? "重试下载" : "下载并安装"}
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={update.phase === "checking"}
+                      onClick={checkForUpdate}
+                    >
+                      {update.phase === "checking"
+                        ? "检查中…"
+                        : update.phase === "error"
+                          ? "重新检查"
+                          : "检查更新"}
+                    </Button>
+                  )}
+                </div>
+              </div>
+              {update.phase === "downloading" && (
+                <div className="space-y-1.5">
+                  <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full rounded-full bg-primary transition-all"
+                      style={{
+                        width:
+                          update.total && update.total > 0
+                            ? `${Math.min(100, (update.downloaded / update.total) * 100)}%`
+                            : "100%",
+                      }}
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {update.total
+                      ? `${(update.downloaded / 1024 / 1024).toFixed(1)} / ${(update.total / 1024 / 1024).toFixed(1)} MB`
+                      : `${(update.downloaded / 1024 / 1024).toFixed(1)} MB`}
+                  </p>
+                </div>
+              )}
+              {update.notes && update.phase !== "idle" && (
+                <pre className="max-h-32 overflow-auto rounded-md border bg-muted/40 p-3 font-mono text-xs whitespace-pre-wrap">
+                  {update.notes}
+                </pre>
+              )}
             </div>
-          )}
-          {update.notes && update.phase !== "idle" && (
-            <pre className="max-h-32 overflow-auto rounded-md border bg-muted/40 p-3 font-mono text-xs whitespace-pre-wrap">
-              {update.notes}
-            </pre>
-          )}
-        </div>
-      </SectionCard>
+          </SectionCard>
+        )}
+      </div>
 
-      <SectionCard
-        title="配置导入 / 导出与日志"
-        description="导出 JSON(渠道 + 密钥 + 定价 + 设置,含明文密钥,请妥善保管;日志不导出)。导入为整表替换并立即热生效。"
-      >
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            disabled={exportMut.isPending}
-            onClick={() => exportMut.mutate()}
-          >
-            导出配置
-          </Button>
-          <Button
-            variant="outline"
-            disabled={importPreviewMut.isPending || importApplyMut.isPending}
-            onClick={() => importPreviewMut.mutate()}
-          >
-            导入配置
-          </Button>
-          <Button
-            variant="destructive"
-            disabled={clearLogsMut.isPending}
-            onClick={() => setClearLogsOpen(true)}
-          >
-            清空日志
-          </Button>
-        </div>
-      </SectionCard>
-
-      {/* 底部保存条 */}
-      <div className="sticky bottom-0 -mx-6 flex items-center justify-between border-t bg-background/95 px-6 py-3 backdrop-blur">
+      {/* 底部保存条:所有分类共用,修改不丢失 */}
+      <div className="sticky bottom-0 -mx-6 mt-6 flex items-center justify-between border-t bg-background/95 px-6 py-3 backdrop-blur">
         <span className="text-xs text-muted-foreground">
           {dirty ? "有未保存的修改" : "所有修改已保存"}
         </span>

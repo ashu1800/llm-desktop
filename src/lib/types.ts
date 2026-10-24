@@ -28,6 +28,10 @@ export interface AppSettings {
   saveFullBody: boolean;
   theme: ThemeMode;
   language: string;
+  /** 客户端显示名映射:键 = 识别出的原名,值 = 自定义显示名 */
+  clientAliases: Record<string, string>;
+  /** 客户端图标映射:键 = 原名,值 = emoji */
+  clientIcons: Record<string, string>;
   breaker: BreakerDefaults;
   timeouts: TimeoutDefaults;
 }

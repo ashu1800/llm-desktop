@@ -3,6 +3,7 @@ import { Toaster, toast } from "sonner";
 import { useGatewayEvents, useThemeEffect } from "@/hooks/use-gateway";
 import { useUpdater } from "@/hooks/use-updater";
 import { useAppStore } from "@/stores/app-store";
+import { cn } from "@/lib/utils";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
 import { UpdateDialog } from "@/components/UpdateDialog";
@@ -48,8 +49,19 @@ export default function App() {
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar page={page} />
-        <main className="flex-1 overflow-auto bg-muted/30 p-6">
-          {page === "dashboard" && <DashboardPage />}
+        {/* dashboard 日志表需内滚贴合视口(overflow-hidden + h-full);
+            其余页面内容超长需页面级滚动(overflow-auto),按页面切换 */}
+        <main
+          className={cn(
+            "flex-1 bg-muted/30 p-6",
+            page === "dashboard" ? "overflow-hidden" : "overflow-auto",
+          )}
+        >
+          {page === "dashboard" && (
+            <div className="h-full">
+              <DashboardPage />
+            </div>
+          )}
           {page === "channels" && <ChannelsPage />}
           {page === "keys" && <KeysPage />}
           {page === "pricing" && <PricingPage />}

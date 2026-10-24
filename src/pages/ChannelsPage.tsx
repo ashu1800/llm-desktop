@@ -332,8 +332,14 @@ function ChannelDialog({
                     <Input
                       type="number"
                       className="h-8"
+                      // failureRate 存 0~1 小数,显示与输入按百分比刻度(与全局设置页一致):
+                      // 显示 ×100,回写 /100;否则 0.5 会显示成"0.5"被按 0.5% 误读
                       value={
-                        (form.breakerOverride?.[k] ?? "") as unknown as number
+                        k === "failureRate"
+                          ? form.breakerOverride?.[k] != null
+                            ? Math.round((form.breakerOverride[k] as number) * 100)
+                            : ""
+                          : ((form.breakerOverride?.[k] ?? "") as unknown as number)
                       }
                       onChange={(e) => {
                         const raw = e.target.value;
@@ -545,8 +551,12 @@ export function ChannelsPage() {
                           size="icon"
                           title={ch.enabled ? "停用" : "启用"}
                           onClick={async () => {
-                            await api.setChannelEnabled(ch.id, !ch.enabled);
-                            refresh();
+                            try {
+                              await api.setChannelEnabled(ch.id, !ch.enabled);
+                              refresh();
+                            } catch (e) {
+                              toast.error(String(e));
+                            }
                           }}
                         >
                           <Power className="h-3.5 w-3.5" />
@@ -556,8 +566,12 @@ export function ChannelsPage() {
                           size="icon"
                           title="手动恢复熔断"
                           onClick={async () => {
-                            await api.recoverChannel(ch.id);
-                            toast.success("已手动恢复");
+                            try {
+                              await api.recoverChannel(ch.id);
+                              toast.success("已手动恢复");
+                            } catch (e) {
+                              toast.error(String(e));
+                            }
                           }}
                         >
                           <RotateCcw className="h-3.5 w-3.5" />
@@ -578,9 +592,20 @@ export function ChannelsPage() {
                           size="icon"
                           title="删除"
                           onClick={async () => {
-                            await api.deleteChannel(ch.id);
-                            refresh();
-                            toast.success("已删除");
+                            // 删除渠道连带其配置,不可恢复:二次确认
+                            if (
+                              !window.confirm(
+                                `确认删除渠道「${ch.name}」?其上游密钥与映射将一并移除,且不可恢复。`,
+                              )
+                            )
+                              return;
+                            try {
+                              await api.deleteChannel(ch.id);
+                              refresh();
+                              toast.success("已删除");
+                            } catch (e) {
+                              toast.error(String(e));
+                            }
                           }}
                         >
                           <Trash2 className="h-3.5 w-3.5" />

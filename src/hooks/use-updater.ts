@@ -1,5 +1,5 @@
 // 自动更新:tauri-plugin-updater(GitHub Releases latest.json)+ minisign 签名校验
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { check, type Update, type DownloadEvent } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { invoke } from "@tauri-apps/api/core";
@@ -35,6 +35,29 @@ const AUTO_RECHECK_INTERVAL_MS = 60 * 1000;
 type CheckOutcome = { update: Update | null } | { error: string };
 let inFlightCheck: Promise<CheckOutcome> | null = null;
 
+// ---------- 模块级单例状态 ----------
+// App 与 SettingsPage 各挂一个 useUpdater;若各自持有 state,一边下载中另一边
+// 仍显示"立即更新",可并发 downloadAndInstall(二次拉起安装器)、重复 toast。
+// state/sharedUpdate 收敛到模块级,订阅计数为 0 时状态保留(下次挂载继续显示)。
+
+let sharedState: UpdaterState = {
+  phase: "idle",
+  currentVersion: null,
+  nextVersion: null,
+  notes: null,
+  downloaded: 0,
+  total: null,
+  error: null,
+  pendingUpdate: false,
+};
+let sharedUpdate: Update | null = null;
+const subscribers = new Set<(s: UpdaterState) => void>();
+
+function setShared(updater: (s: UpdaterState) => UpdaterState) {
+  sharedState = updater(sharedState);
+  for (const fn of subscribers) fn(sharedState);
+}
+
 function doCheck(): Promise<CheckOutcome> {
   if (!inFlightCheck) {
     inFlightCheck = (async () => {
@@ -53,25 +76,17 @@ function doCheck(): Promise<CheckOutcome> {
 
 export function useUpdater(options?: { auto?: boolean }) {
   const auto = options?.auto ?? false;
-  const [state, setState] = useState<UpdaterState>({
-    phase: "idle",
-    currentVersion: null,
-    nextVersion: null,
-    notes: null,
-    downloaded: 0,
-    total: null,
-    error: null,
-    pendingUpdate: false,
-  });
-  // check() 返回的 Update 对象必须持有引用才能 downloadAndInstall
-  const updateRef = useRef<Update | null>(null);
-  const phaseRef = useRef<UpdatePhase>(state.phase);
-  useEffect(() => {
-    phaseRef.current = state.phase;
-  }, [state.phase]);
-
-  const applyEvent = (e: DownloadEvent) => {
-    setState((s) => {
+  const state = useSyncExternalStore(
+    (onStoreChange) => {
+      subscribers.add(onStoreChange);
+      return () => subscribers.delete(onStoreChange);
+    },
+    () => sharedState,
+    () => sharedState,
+  );
+  // 稳定引用:所有实例共享同一份闭包,操作作用于共享状态
+  const applyEvent = useCallback((e: DownloadEvent) => {
+    setShared((s) => {
       switch (e.event) {
         case "Started":
           return { ...s, phase: "downloading", downloaded: 0, total: e.data.contentLength ?? null };
@@ -83,17 +98,21 @@ export function useUpdater(options?: { auto?: boolean }) {
           return s;
       }
     });
-  };
+  }, []);
 
   const runCheck = useCallback(async () => {
-    setState((s) => ({ ...s, phase: "checking", error: null }));
-    const outcome = await doCheck();
-    if ("error" in outcome) {
-      setState((s) => ({ ...s, phase: "error", error: `检查失败: ${outcome.error}` }));
+    // 全局"下载中/待重启"时拒绝检查,防另一实例并发打断安装
+    if (sharedState.phase === "downloading" || sharedState.phase === "ready") {
       return;
     }
-    updateRef.current = outcome.update;
-    setState((s) =>
+    setShared((s) => ({ ...s, phase: "checking", error: null }));
+    const outcome = await doCheck();
+    if ("error" in outcome) {
+      setShared((s) => ({ ...s, phase: "error", error: `检查失败: ${outcome.error}` }));
+      return;
+    }
+    sharedUpdate = outcome.update;
+    setShared((s) =>
       outcome.update
         ? {
             ...s,
@@ -107,36 +126,36 @@ export function useUpdater(options?: { auto?: boolean }) {
   }, []);
 
   const downloadAndInstall = useCallback(async () => {
-    const update = updateRef.current;
+    const update = sharedUpdate;
     if (!update) return;
-    setState((s) => ({ ...s, phase: "downloading", downloaded: 0, total: null, error: null }));
+    setShared((s) => ({ ...s, phase: "downloading", downloaded: 0, total: null, error: null }));
     try {
       // 安装会经 NSIS /R 重启应用;先落盘标记,新实例据此强制显示界面
       // (否则静默启动设置会让更新后的窗口不出现)。失败不阻断更新。
       await invoke("mark_update_restart").catch(() => {});
       await update.downloadAndInstall(applyEvent);
-      setState((s) => ({ ...s, phase: "ready" }));
+      setShared((s) => ({ ...s, phase: "ready" }));
     } catch (e) {
-      setState((s) => ({ ...s, phase: "error", error: `下载/安装失败: ${e}` }));
+      setShared((s) => ({ ...s, phase: "error", error: `下载/安装失败: ${e}` }));
     }
-  }, []);
+  }, [applyEvent]);
 
   const relaunchToUpdate = useCallback(async () => {
     await relaunch();
   }, []);
 
-  // 当前版本 + 启动检查 + 每 5 分钟重查(失败静默,不打扰)
+  // 当前版本(一次性,写入共享态) + 启动检查(仅 auto 实例) + 周期重查
   useEffect(() => {
     let disposed = false;
     getVersion()
-      .then((v) => !disposed && setState((s) => ({ ...s, currentVersion: v })))
+      .then((v) => !disposed && setShared((s) => ({ ...s, currentVersion: v })))
       .catch(() => {});
     let timer: ReturnType<typeof setInterval> | undefined;
     if (auto) {
       runCheck().catch(() => {});
       timer = setInterval(() => {
         // 下载中/待重启时不重查,避免打断进行中的安装
-        if (phaseRef.current === "downloading" || phaseRef.current === "ready") {
+        if (sharedState.phase === "downloading" || sharedState.phase === "ready") {
           return;
         }
         runCheck().catch(() => {});
