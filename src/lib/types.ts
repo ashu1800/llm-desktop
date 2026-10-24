@@ -121,6 +121,8 @@ export interface PriceEntry {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** true = 四个价格字段按 美元/百万 token 解释 */
+  usd: boolean;
 }
 
 export interface UnpricedModel {
@@ -167,8 +169,10 @@ export interface LogItem {
   ttftMs: number | null;
   totalMs: number | null;
   speed: number | null;
-  /** 人民币微元(1e-6 元) */
+  /** 人民币微元(1e-6 元);usd 行为微美元(1e-6 $) */
   cost: number | null;
+  /** 计费币种:"cny"(默认)|"usd" */
+  currency: string;
   client: string | null;
 }
 
@@ -181,6 +185,8 @@ export interface StatsSummary {
   count: number;
   /** 人民币微元(1e-6 元) */
   totalCost: number;
+  /** 美元微(1e-6 $):美元定价条目单独记账 */
+  totalCostUsd: number;
   avgTtftMs: number | null;
   avgSpeed: number | null;
   errorCount: number;

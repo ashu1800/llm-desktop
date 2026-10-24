@@ -6,6 +6,12 @@ export function fmtYuan(fen: number | null | undefined): string {
   return `¥${(fen / 1_000_000).toFixed(6)}`;
 }
 
+/** 美元微(1e-6 $)→ $ 元,保留 6 位小数;与人民币互不换算、分列展示 */
+export function fmtUsd(microUsd: number | null | undefined): string {
+  if (microUsd == null) return "—";
+  return `$${(microUsd / 1_000_000).toFixed(6)}`;
+}
+
 /** 千分位 K 缩写:940 → 940,12345 → 12.3K,1234567 → 1.2M */
 export function fmtK(n: number | null | undefined): string {
   if (n == null) return "—";

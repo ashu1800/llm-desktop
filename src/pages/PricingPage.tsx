@@ -39,6 +39,7 @@ const ZERO_PRICE: PriceEntry = {
   output: 0,
   cacheRead: 0,
   cacheWrite: 0,
+  usd: false,
 };
 
 // ---------- 定价编辑 Dialog(quick=从未定价清单补录,保存即回填) ----------
@@ -112,7 +113,8 @@ function PriceDialog({
         <DialogHeader>
           <DialogTitle>{quick ? "快捷补录定价" : editing ? "编辑定价" : "新增定价"}</DialogTitle>
           <DialogDescription>
-            单位:元/百万 token;模型名支持 prefix* 通配(如 gpt-4o*),精确名优先匹配
+            单位:{form.usd ? "美元" : "元"}/百万 token;模型名支持 prefix* 通配(如
+            gpt-4o*),精确名优先匹配
             {quick && ";保存后自动回填该模型的历史费用"}
           </DialogDescription>
         </DialogHeader>
@@ -126,6 +128,16 @@ function PriceDialog({
               className="font-mono"
             />
           </div>
+          {/* 币种开关:美元条目按 $/M 记账,消耗统计单独分列,不与人民币混算 */}
+          <label className="flex w-fit cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={form.usd}
+              onChange={(e) => patch({ usd: e.target.checked })}
+              className="h-4 w-4 accent-primary"
+            />
+            按美元定价($/M token)
+          </label>
           <div className="grid grid-cols-2 gap-3">
             {numField("输入", "input")}
             {numField("输出", "output")}
@@ -307,6 +319,11 @@ export function PricingPage() {
                       {p.pattern.endsWith("*") && (
                         <Badge variant="secondary" className="ml-2 px-1.5">
                           通配
+                        </Badge>
+                      )}
+                      {p.usd && (
+                        <Badge variant="secondary" className="ml-2 px-1.5">
+                          $
                         </Badge>
                       )}
                     </td>

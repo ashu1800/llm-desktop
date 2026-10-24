@@ -16,22 +16,58 @@ impl Usage {
     // 缓存命中率等派生值由前端按 prompt/cache_read 计算
 }
 
+/// 计费币种:定价条目可按人民币或美元标价,日志与统计按条目实际币种记账
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Currency {
+    #[default]
+    Cny,
+    Usd,
+}
+
+impl Currency {
+    /// 日志列存储值
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Currency::Cny => "cny",
+            Currency::Usd => "usd",
+        }
+    }
+
+    /// 日志列值解析(未知值回退人民币:历史行兼容)
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "usd" => Currency::Usd,
+            _ => Currency::Cny,
+        }
+    }
+}
+
 /// 费用公式(PRD §3.6):
 /// cost = (prompt − cache_read − cache_write) × 输入价 + cache_read × 缓存读价
 ///        + cache_write × 缓存写价 + completion × 输出价   (单价均 元/1M token)
 ///
-/// 返回值单位为**微元**(1e-6 元,整数):旧「分」粒度下小额请求(如缓存长上下文
-/// 0.0157 元)被四舍五入到 2 分,虚高近 30%;微元与 UI 的 6 位小数显示精确对齐。
+/// 返回值单位为**微微元**(1e-6 元,整数):旧「分」粒度下小额请求(如缓存长上下文
+/// 0.0157 元)被四舍五入到 2 分,虚高近 30%;微微元与 UI 的 6 位小数显示精确对齐。
+/// 美元条目(usd=true)同理按 微美元(1e-6 $)存储,与人民币互不换算、分列统计。
 ///
 /// 计算顺序:先在 token 量级聚合各项乘积、最后一步才除 1e6——每项
 /// (token × 单价) 量级 ≤ 1e12,f64 精度足够;若先除再乘,大数值会引入 ±1 微元漂移。
 pub fn compute_cost(price: &pricing::PriceEntry, usage: &Usage) -> i64 {
     let plain_input = (usage.prompt - usage.cache_read - usage.cache_write).max(0) as f64;
-    let micro_yuan = plain_input * price.input
+    let micro = plain_input * price.input
         + usage.cache_read as f64 * price.cache_read
         + usage.cache_write as f64 * price.cache_write
         + usage.completion as f64 * price.output;
-    micro_yuan.round() as i64
+    micro.round() as i64
+}
+
+/// 定价条目对应的记账币种
+pub fn currency_of(price: &pricing::PriceEntry) -> Currency {
+    if price.usd {
+        Currency::Usd
+    } else {
+        Currency::Cny
+    }
 }
 
 #[cfg(test)]
@@ -47,6 +83,7 @@ mod tests {
             output: 2.0,
             cache_read: 0.1,
             cache_write: 1.25,
+            usd: false,
         };
         // prompt=1_000_000(其中 cache_read=200_000, cache_write=100_000), completion=500_000
         let u = Usage {
@@ -68,6 +105,7 @@ mod tests {
             output: 2.8,
             cache_read: 0.23,
             cache_write: 0.0,
+            usd: false,
         };
         let u = Usage {
             prompt: 67_066,
@@ -87,6 +125,7 @@ mod tests {
             output: 2.0,
             cache_read: 0.0,
             cache_write: 0.0,
+            usd: false,
         };
         assert_eq!(compute_cost(&p, &Usage::default()), 0);
     }

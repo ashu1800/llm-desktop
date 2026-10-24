@@ -30,6 +30,9 @@ pub struct RequestLog {
     pub total_ms: Option<i64>,
     pub speed: Option<f64>,
     pub cost: Option<i64>,
+    /// 计费币种:"cny"(默认,历史行)|"usd";cost 单位相应为 微元/微美元
+    #[serde(default)]
+    pub currency: String,
     pub client: Option<String>,
     pub req_snapshot: Option<String>,
     pub resp_snapshot: Option<String>,
@@ -86,8 +89,8 @@ async fn insert_batch(pool: &SqlitePool, logs: &[RequestLog]) -> Result<(), Stri
             "INSERT INTO request_logs (ts, key_id, key_name, channel_id, channel_name, model,
                  mapped_model, tag, protocol_in, protocol_up, status, is_stream, attempts, error,
                  prompt_tokens, completion_tokens, cache_read, cache_write, estimated, ttft_ms,
-                 total_ms, speed, cost, client, req_snapshot, resp_snapshot)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                 total_ms, speed, cost, currency, client, req_snapshot, resp_snapshot)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(l.ts)
         .bind(l.key_id)
@@ -112,6 +115,7 @@ async fn insert_batch(pool: &SqlitePool, logs: &[RequestLog]) -> Result<(), Stri
         .bind(l.total_ms)
         .bind(l.speed)
         .bind(l.cost)
+        .bind(&l.currency)
         .bind(&l.client)
         .bind(&l.req_snapshot)
         .bind(&l.resp_snapshot)
@@ -186,12 +190,17 @@ pub async fn backfill_costs(
                 cache_write: cache_write.max(0),
             };
             let cost = crate::billing::compute_cost(p, &usage);
-            let r = sqlx::query("UPDATE request_logs SET cost=? WHERE id=? AND cost IS NULL")
-                .bind(cost)
-                .bind(id)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| format!("回填费用失败: {e}"))?;
+            // 回填同时写入币种:定价条目可能已改为美元,统计按行内 currency 分列
+            let currency = crate::billing::currency_of(p);
+            let r = sqlx::query(
+                "UPDATE request_logs SET cost=?, currency=? WHERE id=? AND cost IS NULL",
+            )
+            .bind(cost)
+            .bind(currency.as_str())
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("回填费用失败: {e}"))?;
             updated += r.rows_affected();
         }
         tx.commit()
@@ -252,12 +261,15 @@ pub struct LogItem {
     pub total_ms: Option<i64>,
     pub speed: Option<f64>,
     pub cost: Option<i64>,
+    /// 计费币种:"cny"(默认,历史行)|"usd";cost 单位相应为 微元/微美元
+    #[serde(default)]
+    pub currency: String,
     pub client: Option<String>,
 }
 
 const LIST_COLS: &str = "id, ts, key_id, key_name, channel_id, channel_name, model, mapped_model, \
      tag, protocol_in, protocol_up, status, is_stream, attempts, error, prompt_tokens, \
-     completion_tokens, cache_read, cache_write, estimated, ttft_ms, total_ms, speed, cost, client";
+     completion_tokens, cache_read, cache_write, estimated, ttft_ms, total_ms, speed, cost, currency, client";
 
 fn push_filters<'a>(qb: &mut QueryBuilder<'a, Sqlite>, f: &'a LogFilter) {
     qb.push(" WHERE 1=1");
@@ -274,7 +286,8 @@ fn push_filters<'a>(qb: &mut QueryBuilder<'a, Sqlite>, f: &'a LogFilter) {
         qb.push(" AND channel_id = ").push_bind(v);
     }
     if let Some(m) = f.model.as_deref().filter(|s| !s.is_empty()) {
-        qb.push(" AND model LIKE ").push_bind(format!("%{m}%"));
+        // 日志页模型下拉筛选:选项来自 DISTINCT model,精确匹配;LIKE 语义保留给 keyword
+        qb.push(" AND model = ").push_bind(m.to_string());
     }
     if let Some(k) = f.keyword.as_deref().filter(|s| !s.is_empty()) {
         qb.push(" AND (model LIKE ")
@@ -352,6 +365,8 @@ pub struct StatsSummary {
     pub count: i64,
     /// 人民币微元(1e-6 元;0003 迁移起 cost 全表为微元口径)
     pub total_cost: i64,
+    /// 美元微(1e-6 $):美元定价条目单独记账,与人民币互不换算
+    pub total_cost_usd: i64,
     pub avg_ttft_ms: Option<f64>,
     pub avg_speed: Option<f64>,
     pub error_count: i64,
@@ -360,19 +375,23 @@ pub struct StatsSummary {
     pub cache_read: i64,
 }
 
-/// 汇总查询行:(总数, 总费用分, 平均首字, 平均速度, 错误数, 输入词元, 输出词元, 缓存读)
-type SummaryRow = (i64, i64, Option<f64>, Option<f64>, i64, i64, i64, i64);
+/// 汇总查询行:(总数, 人民币总费用, 美元总费用, 平均首字, 平均速度, 错误数, 输入词元, 输出词元, 缓存读)
+type SummaryRow = (i64, i64, i64, Option<f64>, Option<f64>, i64, i64, i64, i64);
 
 pub async fn stats_summary(pool: &SqlitePool, f: &LogFilter) -> Result<StatsSummary, String> {
     let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
-        "SELECT COUNT(*), COALESCE(SUM(cost),0), AVG(ttft_ms), AVG(speed),
-             COALESCE(SUM(status NOT BETWEEN 200 AND 299 OR error IS NOT NULL),0),
-             COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
-             COALESCE(SUM(cache_read),0)
-         FROM request_logs",
+        // 币种分列聚合:历史行 currency='cny'(0004 默认值),美元定价请求写 'usd'
+        "SELECT COUNT(*),
+              COALESCE(SUM(CASE WHEN currency = 'usd' THEN 0 ELSE cost END),0),
+              COALESCE(SUM(CASE WHEN currency = 'usd' THEN cost ELSE 0 END),0),
+              AVG(ttft_ms), AVG(speed),
+              COALESCE(SUM(status NOT BETWEEN 200 AND 299 OR error IS NOT NULL),0),
+              COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
+              COALESCE(SUM(cache_read),0)
+          FROM request_logs",
     );
     push_filters(&mut qb, f);
-    let (count, total_cost, avg_ttft, avg_speed, error_count, prompt, completion, cache_read): SummaryRow =
+    let (count, total_cost, total_cost_usd, avg_ttft, avg_speed, error_count, prompt, completion, cache_read): SummaryRow =
         qb.build_query_as()
             .fetch_one(pool)
             .await
@@ -380,6 +399,7 @@ pub async fn stats_summary(pool: &SqlitePool, f: &LogFilter) -> Result<StatsSumm
     Ok(StatsSummary {
         count,
         total_cost,
+        total_cost_usd,
         avg_ttft_ms: avg_ttft,
         avg_speed,
         error_count,
@@ -403,6 +423,17 @@ pub async fn list_clients(pool: &SqlitePool) -> Result<Vec<String>, String> {
     .await
     .map_err(|e| format!("查询客户端列表失败: {e}"))?;
     Ok(rows.into_iter().map(|(c,)| c).collect())
+}
+
+/// 历史日志中出现过的全部模型名(去重,按字母序):日志筛选下拉选项来源
+pub async fn list_models(pool: &SqlitePool) -> Result<Vec<String>, String> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT DISTINCT model FROM request_logs ORDER BY model",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("查询模型列表失败: {e}"))?;
+    Ok(rows.into_iter().map(|(m,)| m).collect())
 }
 
 #[cfg(test)]
@@ -429,6 +460,7 @@ mod tests {
             output,
             cache_read: 0.0,
             cache_write: 0.0,
+            usd: false,
         }
     }
 
@@ -525,7 +557,12 @@ mod tests {
         assert_eq!(errs.1, 1);
         assert_eq!(errs.0[0].status, 503);
 
+        // 模型筛选为精确匹配(下拉选项来自 DISTINCT model);前缀匹配走 keyword
+        let f = LogFilter { model: Some("gpt-a".into()), ..Default::default() };
+        assert_eq!(query_logs(&pool, &f).await.unwrap().1, 2);
         let f = LogFilter { model: Some("gpt".into()), ..Default::default() };
+        assert_eq!(query_logs(&pool, &f).await.unwrap().1, 0);
+        let f = LogFilter { keyword: Some("gpt".into()), ..Default::default() };
         assert_eq!(query_logs(&pool, &f).await.unwrap().1, 3);
 
         let f = LogFilter { keyword: Some("故障".into()), ..Default::default() };

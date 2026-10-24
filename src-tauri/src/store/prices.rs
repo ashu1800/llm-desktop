@@ -4,38 +4,40 @@ use crate::billing::pricing::PriceEntry;
 use crate::util::now_ms;
 
 pub async fn list(pool: &SqlitePool) -> Result<Vec<PriceEntry>, String> {
-    let rows: Vec<(String, f64, f64, f64, f64)> = sqlx::query_as(
-        "SELECT pattern, input, output, cache_read, cache_write FROM model_prices ORDER BY id",
+    let rows: Vec<(String, f64, f64, f64, f64, i64)> = sqlx::query_as(
+        "SELECT pattern, input, output, cache_read, cache_write, usd FROM model_prices ORDER BY id",
     )
     .fetch_all(pool)
     .await
     .map_err(|e| format!("读取定价失败: {e}"))?;
     Ok(rows
         .into_iter()
-        .map(|(pattern, input, output, cache_read, cache_write)| PriceEntry {
+        .map(|(pattern, input, output, cache_read, cache_write, usd)| PriceEntry {
             pattern,
             input,
             output,
             cache_read,
             cache_write,
+            usd: usd != 0,
         })
         .collect())
 }
 
 pub async fn upsert(pool: impl Executor<'_, Database = sqlx::Sqlite>, p: &PriceEntry) -> Result<(), String> {
     sqlx::query(
-        "INSERT INTO model_prices (pattern, input, output, cache_read, cache_write, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)
+        "INSERT INTO model_prices (pattern, input, output, cache_read, cache_write, usd, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(pattern) DO UPDATE SET
            input=excluded.input, output=excluded.output,
            cache_read=excluded.cache_read, cache_write=excluded.cache_write,
-           updated_at=excluded.updated_at",
+           usd=excluded.usd, updated_at=excluded.updated_at",
     )
     .bind(&p.pattern)
     .bind(p.input)
     .bind(p.output)
     .bind(p.cache_read)
     .bind(p.cache_write)
+    .bind(p.usd)
     .bind(now_ms())
     .execute(pool)
     .await

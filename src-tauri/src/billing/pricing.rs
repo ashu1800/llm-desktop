@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use tiktoken_rs::CoreBPE;
 
 /// 全局定价表条目:精确名或 prefix* 通配;价格单位 元/百万 token
+/// usd=true 时四个价格字段按 美元/百万 token 解释,日志与统计随之标记币种
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PriceEntry {
@@ -12,6 +13,8 @@ pub struct PriceEntry {
     pub output: f64,
     pub cache_read: f64,
     pub cache_write: f64,
+    #[serde(default)]
+    pub usd: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -61,6 +64,7 @@ mod tests {
                     output: 2.0,
                     cache_read: 0.0,
                     cache_write: 0.0,
+                    usd: false,
                 },
                 PriceEntry {
                     pattern: "gpt-4o".into(),
@@ -68,6 +72,7 @@ mod tests {
                     output: 15.0,
                     cache_read: 0.0,
                     cache_write: 0.0,
+                    usd: false,
                 },
                 PriceEntry {
                     pattern: "gpt-4o-mini*".into(),
@@ -75,6 +80,7 @@ mod tests {
                     output: 0.6,
                     cache_read: 0.0,
                     cache_write: 0.0,
+                    usd: false,
                 },
             ],
         }
@@ -97,6 +103,7 @@ mod tests {
                     output: 9.0,
                     cache_read: 0.0,
                     cache_write: 0.0,
+                    usd: false,
                 },
                 PriceEntry {
                     pattern: "gpt*".into(),
@@ -104,6 +111,7 @@ mod tests {
                     output: 1.0,
                     cache_read: 0.0,
                     cache_write: 0.0,
+                    usd: false,
                 },
             ],
         };

@@ -38,3 +38,9 @@ pub async fn clear_logs(state: State<'_, AppState>) -> Result<(), String> {
 pub async fn list_clients(state: State<'_, AppState>) -> Result<Vec<String>, String> {
     logs::list_clients(&state.db).await
 }
+
+/// 历史日志中出现过的模型名(去重):日志筛选下拉的选项来源
+#[tauri::command]
+pub async fn list_models(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    logs::list_models(&state.db).await
+}

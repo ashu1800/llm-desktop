@@ -124,6 +124,7 @@ mod tests {
             output: 2.0,
             cache_read: 0.1,
             cache_write: 0.2,
+            usd: false,
         };
         crate::store::prices::upsert(&pool, &price).await.unwrap();
         crate::store::prices::upsert(&pool, &price).await.unwrap(); // upsert 幂等
