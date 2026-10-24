@@ -3,7 +3,7 @@ use axum::http::HeaderMap;
 use crate::server::error::GatewayError;
 use crate::state::AppState;
 use crate::store::api_keys::ApiKey;
-use crate::util::ct_eq;
+use crate::util::{ct_eq, read_ok};
 
 pub struct AuthedKey {
     pub id: i64,
@@ -41,7 +41,7 @@ pub fn authenticate(
         return Err(GatewayError::unauthorized("缺少 API 密钥"));
     }
 
-    let keys = state.keys.read().unwrap();
+    let keys = read_ok(&state.keys);
     let found: Option<&ApiKey> = keys.iter().find(|k| {
         k.key.starts_with("sk-gw-")
             && candidates

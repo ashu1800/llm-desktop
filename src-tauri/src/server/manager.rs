@@ -15,7 +15,7 @@ pub fn parse_listen(listen_addr: &str, port: u16) -> Result<SocketAddr, String> 
 }
 
 pub fn status_of(state: &AppState) -> ServiceStatus {
-    let guard = state.server.lock().unwrap();
+    let guard = crate::util::lock_ok(&state.server);
     match guard.as_ref() {
         Some(h) => ServiceStatus {
             running: true,
@@ -32,7 +32,7 @@ pub fn status_of(state: &AppState) -> ServiceStatus {
 pub async fn start(state: &AppState, app: &AppHandle) -> Result<SocketAddr, String> {
     let _guard = state.listen_lock.lock().await;
     {
-        let guard = state.server.lock().unwrap();
+        let guard = crate::util::lock_ok(&state.server);
         if let Some(h) = guard.as_ref() {
             return Ok(h.addr);
         }
@@ -43,7 +43,7 @@ pub async fn start(state: &AppState, app: &AppHandle) -> Result<SocketAddr, Stri
         .await
         .map_err(|e| format!("无法监听 {target}(端口可能被占用): {e}"))?;
     let addr = handle.addr;
-    *state.server.lock().unwrap() = Some(handle);
+    *crate::util::lock_ok(&state.server) = Some(handle);
     publish_status(state, app);
     Ok(addr)
 }
@@ -51,7 +51,7 @@ pub async fn start(state: &AppState, app: &AppHandle) -> Result<SocketAddr, Stri
 /// 停止代理监听(幂等)
 pub async fn stop(state: &AppState, app: &AppHandle) -> Result<(), String> {
     let _guard = state.listen_lock.lock().await;
-    let old = state.server.lock().unwrap().take();
+    let old = crate::util::lock_ok(&state.server).take();
     if let Some(h) = old {
         h.stop().await;
     }
@@ -63,12 +63,12 @@ pub async fn stop(state: &AppState, app: &AppHandle) -> Result<(), String> {
 /// 绑定失败(如端口被占用)时保持原监听不变并返回错误。
 pub async fn apply_listen_change(state: &AppState, target: SocketAddr) -> Result<(), String> {
     let _guard = state.listen_lock.lock().await;
-    let running = state.server.lock().unwrap().is_some();
+    let running = crate::util::lock_ok(&state.server).is_some();
     if running {
         let new_handle = super::spawn(state.clone(), target)
             .await
             .map_err(|e| format!("端口切换失败,{target} 无法监听(可能被占用): {e}"))?;
-        let old = state.server.lock().unwrap().replace(new_handle);
+        let old = crate::util::lock_ok(&state.server).replace(new_handle);
         // 旧监听后台排水:进行中的请求继续完成(PRD:管理操作不中断请求),命令不再阻塞 UI
         if let Some(old) = old {
             tauri::async_runtime::spawn(async move { old.stop().await; });
