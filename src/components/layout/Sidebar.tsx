@@ -2,6 +2,7 @@ import {
   ArrowUp,
   Cable,
   Coins,
+  Github,
   KeyRound,
   LayoutDashboard,
   Settings,
@@ -44,13 +45,13 @@ export function Sidebar({
   version,
 }: SidebarProps) {
   return (
-    <aside className="flex w-56 shrink-0 flex-col border-r bg-muted">
+    <aside className="flex w-[134px] shrink-0 flex-col border-r bg-muted">
+      {/* 品牌区:自绘标题栏后应用名在顶栏展示,此处只保留图标+副标题避免重复 */}
       <div className="flex h-14 items-center gap-2.5 border-b px-4">
         <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
           <Waypoints className="h-4 w-4" />
         </div>
         <div className="leading-tight">
-          <div className="text-sm font-semibold">LLM Gateway</div>
           <div className="text-[11px] text-muted-foreground">本地 API 网关</div>
         </div>
       </div>
@@ -71,8 +72,17 @@ export function Sidebar({
           </button>
         ))}
       </nav>
-      <div className="flex items-center justify-between border-t p-3 text-[11px] text-muted-foreground">
-        <span>{version ? `v${version}` : ""}</span>
+      <div className="flex items-center justify-between border-t p-3 text-xs text-muted-foreground">
+        <a
+          href="https://github.com/ashu1800/llm-desktop"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="GitHub 仓库"
+          className="inline-flex items-center gap-1.5 transition-colors hover:text-foreground"
+        >
+          <Github className="h-3.5 w-3.5" />
+          <span>{version ? `v${version}` : ""}</span>
+        </a>
         {updateAvailable && (
           <button
             onClick={onOpenUpdate}

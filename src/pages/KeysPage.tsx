@@ -24,12 +24,15 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { api, maskKey } from "@/lib/api";
-import { useApiKeys, useChannels } from "@/hooks/use-gateway";
+import {
+  useApiKeys,
+  useChannels,
+  useSettings,
+} from "@/hooks/use-gateway";
 import type { ApiKey } from "@/lib/types";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -302,6 +305,7 @@ function KeyDialog({
 
 export function KeysPage() {
   const { data: keys, isLoading } = useApiKeys();
+  const { data: settings } = useSettings();
   const qc = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<ApiKey | null>(null);
@@ -323,25 +327,43 @@ export function KeysPage() {
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["keys"] });
 
+  // 客户端接入地址:监听地址+端口+/v1,复制后贴给任意 OpenAI 兼容客户端即可用
+  const baseURL = `http://${settings?.listenAddr ?? "127.0.0.1"}:${settings?.port ?? 8787}/v1`;
+  const copyBaseURL = async () => {
+    try {
+      await navigator.clipboard.writeText(baseURL);
+      toast.success("BaseURL 已复制");
+    } catch {
+      toast.error("复制失败,请手动复制: " + baseURL);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <Card>
         <CardHeader className="flex-row items-center justify-between space-y-0 pb-4">
-          <div>
-            <CardTitle className="text-base">密钥管理</CardTitle>
-            <CardDescription>
-              自建 sk-gw- 密钥;每个密钥可配置有序可用渠道(顺序即故障转移顺序)
-            </CardDescription>
+          <CardTitle className="text-base">密钥管理</CardTitle>
+          <div className="flex items-center gap-2">
+            {/* BaseURL 一键复制:客户端接入网关的入口地址 */}
+            <button
+              onClick={copyBaseURL}
+              title="点击复制客户端接入地址"
+              className="inline-flex items-center gap-1.5 rounded-md border bg-muted/40 px-2.5 py-1.5 text-xs transition-colors hover:bg-accent"
+            >
+              <span className="text-muted-foreground">BaseURL</span>
+              <span className="font-mono text-muted-foreground">{baseURL}</span>
+              <Copy className="h-3 w-3" />
+            </button>
+            <Button
+              size="sm"
+              onClick={() => {
+                setEditing(emptyKey());
+                setDialogOpen(true);
+              }}
+            >
+              <Plus className="h-4 w-4" /> 创建密钥
+            </Button>
           </div>
-          <Button
-            size="sm"
-            onClick={() => {
-              setEditing(emptyKey());
-              setDialogOpen(true);
-            }}
-          >
-            <Plus className="h-4 w-4" /> 创建密钥
-          </Button>
         </CardHeader>
         <CardContent>
           {isLoading ? (

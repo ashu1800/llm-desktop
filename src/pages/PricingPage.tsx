@@ -39,7 +39,10 @@ const ZERO_PRICE: PriceEntry = {
   output: 0,
   cacheRead: 0,
   cacheWrite: 0,
-  usd: false,
+  inputUsd: null,
+  outputUsd: null,
+  cacheReadUsd: null,
+  cacheWriteUsd: null,
 };
 
 // ---------- 定价编辑 Dialog(quick=从未定价清单补录,保存即回填) ----------
@@ -82,39 +85,68 @@ function PriceDialog({
 
   if (!open) return null;
   const patch = (p: Partial<PriceEntry>) => setForm({ ...form, ...p });
+  // 美元组是否启用:任一美元价已配即视为启用(以输入价为准)
+  const usdEnabled = form.inputUsd != null;
 
-  const numField = (
+  // 人民币字段(必填,元/M);仅完整数值回写,"0." 中间态不 patch 防吞小数点
+  const cnyField = (
     label: string,
     key: "input" | "output" | "cacheRead" | "cacheWrite",
-    hint?: string,
   ) => (
     <div className="space-y-1.5">
-      <Label>
-        {label}
-        {hint && (
-          <span className="ml-1 text-xs font-normal text-muted-foreground">
-            {hint}
-          </span>
-        )}
-      </Label>
+      <Label>{label}</Label>
       <Input
         type="number"
         min="0"
         step="0.01"
         value={form[key]}
-        onChange={(e) => patch({ [key]: Number(e.target.value) || 0 })}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (v !== "" && Number.isFinite(Number(v))) patch({ [key]: Number(v) });
+        }}
+        onBlur={(e) => {
+          // 失焦归一:清空/非法回 0
+          const n = Number(e.target.value);
+          if (e.target.value === "" || !Number.isFinite(n)) patch({ [key]: 0 });
+        }}
       />
     </div>
   );
 
+  // 美元字段(可选,$/M);空 = 未定价该侧。勾选启用后以输入价为首(其余空)
+  const usdField = (
+    label: string,
+    key: "inputUsd" | "outputUsd" | "cacheReadUsd" | "cacheWriteUsd",
+  ) => {
+    const v = form[key];
+    return (
+      <div className="space-y-1.5">
+        <Label>{label}</Label>
+        <Input
+          type="number"
+          min="0"
+          step="0.01"
+          placeholder="未定价"
+          value={v ?? ""}
+          onChange={(e) => {
+            const raw = e.target.value;
+            // 空串=取消该侧定价;完整数值才回写,防 "0." 中间态被吞
+            if (raw === "") patch({ [key]: null });
+            else if (Number.isFinite(Number(raw))) patch({ [key]: Number(raw) });
+          }}
+        />
+      </div>
+    );
+  };
+
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>{quick ? "快捷补录定价" : editing ? "编辑定价" : "新增定价"}</DialogTitle>
           <DialogDescription>
-            单位:{form.usd ? "美元" : "元"}/百万 token;模型名支持 prefix* 通配(如
-            gpt-4o*),精确名优先匹配
+            同一模型可同时配置人民币与美元两套价格,渠道侧选择计费币种;模型名支持
+            prefix* 通配(如 gpt-4o*),精确名优先匹配
             {quick && ";保存后自动回填该模型的历史费用"}
           </DialogDescription>
         </DialogHeader>
@@ -128,21 +160,50 @@ function PriceDialog({
               className="font-mono"
             />
           </div>
-          {/* 币种开关:美元条目按 $/M 记账,消耗统计单独分列,不与人民币混算 */}
-          <label className="flex w-fit cursor-pointer items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={form.usd}
-              onChange={(e) => patch({ usd: e.target.checked })}
-              className="h-4 w-4 accent-primary"
-            />
-            按美元定价($/M token)
-          </label>
-          <div className="grid grid-cols-2 gap-3">
-            {numField("输入", "input")}
-            {numField("输出", "output")}
-            {numField("缓存读", "cacheRead")}
-            {numField("缓存写", "cacheWrite")}
+          {/* 人民币组(默认) */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label className="text-sm font-medium">人民币价格(元/百万 token)</Label>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              {cnyField("输入", "input")}
+              {cnyField("输出", "output")}
+              {cnyField("缓存读", "cacheRead")}
+              {cnyField("缓存写", "cacheWrite")}
+            </div>
+          </div>
+          {/* 美元组(可选):勾选后展开;部分配置合法,未配侧按 0 计;
+              输入价清空 = 整组取消且同步清空其余三价(后端 has_usd 只看输入价,
+              残留三价会静默落库不生效且不可见) */}
+          <div className="space-y-2">
+            <label className="flex w-fit cursor-pointer items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={usdEnabled}
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    patch({ inputUsd: form.inputUsd ?? 0 });
+                  } else {
+                    patch({
+                      inputUsd: null,
+                      outputUsd: null,
+                      cacheReadUsd: null,
+                      cacheWriteUsd: null,
+                    });
+                  }
+                }}
+                className="h-4 w-4 accent-primary"
+              />
+              美元价格($/百万 token,可选)
+            </label>
+            {usdEnabled && (
+              <div className="grid grid-cols-2 gap-3">
+                {usdField("输入", "inputUsd")}
+                {usdField("输出", "outputUsd")}
+                {usdField("缓存读", "cacheReadUsd")}
+                {usdField("缓存写", "cacheWriteUsd")}
+              </div>
+            )}
           </div>
         </div>
         <DialogFooter>
@@ -267,12 +328,7 @@ export function PricingPage() {
 
       <Card>
         <CardHeader className="flex-row items-center justify-between space-y-0 pb-4">
-          <div>
-            <CardTitle className="text-base">模型定价</CardTitle>
-            <CardDescription>
-              全局定价表,单位 元/百万 token;精确名优先,通配取最后一条命中
-            </CardDescription>
-          </div>
+          <CardTitle className="text-base">模型定价</CardTitle>
           <div className="flex items-center gap-2">
             <Button
               size="sm"
@@ -321,7 +377,7 @@ export function PricingPage() {
                           通配
                         </Badge>
                       )}
-                      {p.usd && (
+                      {p.inputUsd != null && (
                         <Badge variant="secondary" className="ml-2 px-1.5">
                           $
                         </Badge>

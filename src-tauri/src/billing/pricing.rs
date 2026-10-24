@@ -3,8 +3,11 @@ use std::sync::OnceLock;
 use serde::{Deserialize, Serialize};
 use tiktoken_rs::CoreBPE;
 
-/// 全局定价表条目:精确名或 prefix* 通配;价格单位 元/百万 token
-/// usd=true 时四个价格字段按 美元/百万 token 解释,日志与统计随之标记币种
+use super::Currency;
+
+/// 全局定价表条目:精确名或 prefix* 通配。
+/// 人民币 4 价必填(0 = 未定价该侧);美元 4 价可选(None = 该模型未配美元价)。
+/// 价格单位均为 /百万 token
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PriceEntry {
@@ -14,7 +17,41 @@ pub struct PriceEntry {
     pub cache_read: f64,
     pub cache_write: f64,
     #[serde(default)]
-    pub usd: bool,
+    pub input_usd: Option<f64>,
+    #[serde(default)]
+    pub output_usd: Option<f64>,
+    #[serde(default)]
+    pub cache_read_usd: Option<f64>,
+    #[serde(default)]
+    pub cache_write_usd: Option<f64>,
+}
+
+impl PriceEntry {
+    /// 按币种取价格四元组 (input, output, cache_read, cache_write);
+    /// 该币种未定价(美元未配)返回 None,由调用方决定回退
+    pub fn prices_for(&self, currency: Currency) -> Option<(f64, f64, f64, f64)> {
+        match currency {
+            Currency::Cny => Some((self.input, self.output, self.cache_read, self.cache_write)),
+            Currency::Usd => {
+                // 美元组支持部分配置:任一价未配按 0 计(该侧不收费);
+                // 完全未配美元(has_usd=false)返回 None,由调用方回退人民币
+                if !self.has_usd() {
+                    return None;
+                }
+                Some((
+                    self.input_usd.unwrap_or(0.0),
+                    self.output_usd.unwrap_or(0.0),
+                    self.cache_read_usd.unwrap_or(0.0),
+                    self.cache_write_usd.unwrap_or(0.0),
+                ))
+            }
+        }
+    }
+
+    /// 是否配置了美元价格(以输入价为准:模型至少要有输入价才有计费意义)
+    pub fn has_usd(&self) -> bool {
+        self.input_usd.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -64,7 +101,10 @@ mod tests {
                     output: 2.0,
                     cache_read: 0.0,
                     cache_write: 0.0,
-                    usd: false,
+                    input_usd: None,
+                    output_usd: None,
+                    cache_read_usd: None,
+                    cache_write_usd: None,
                 },
                 PriceEntry {
                     pattern: "gpt-4o".into(),
@@ -72,7 +112,10 @@ mod tests {
                     output: 15.0,
                     cache_read: 0.0,
                     cache_write: 0.0,
-                    usd: false,
+                    input_usd: None,
+                    output_usd: None,
+                    cache_read_usd: None,
+                    cache_write_usd: None,
                 },
                 PriceEntry {
                     pattern: "gpt-4o-mini*".into(),
@@ -80,7 +123,10 @@ mod tests {
                     output: 0.6,
                     cache_read: 0.0,
                     cache_write: 0.0,
-                    usd: false,
+                    input_usd: None,
+                    output_usd: None,
+                    cache_read_usd: None,
+                    cache_write_usd: None,
                 },
             ],
         }
@@ -103,7 +149,10 @@ mod tests {
                     output: 9.0,
                     cache_read: 0.0,
                     cache_write: 0.0,
-                    usd: false,
+                    input_usd: None,
+                    output_usd: None,
+                    cache_read_usd: None,
+                    cache_write_usd: None,
                 },
                 PriceEntry {
                     pattern: "gpt*".into(),
@@ -111,7 +160,10 @@ mod tests {
                     output: 1.0,
                     cache_read: 0.0,
                     cache_write: 0.0,
-                    usd: false,
+                    input_usd: None,
+                    output_usd: None,
+                    cache_read_usd: None,
+                    cache_write_usd: None,
                 },
             ],
         };

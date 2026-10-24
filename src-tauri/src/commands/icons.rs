@@ -22,7 +22,7 @@ pub async fn pick_client_icon(app: AppHandle) -> Result<Option<String>, String> 
                 "图片(全部支持格式)",
                 &[
                     "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tif", "tiff", "tga",
-                    "dds", "ff", "farbfeld", "hdr", "exr", "qoi", "pcx",
+                    "dds", "ff", "farbfeld", "hdr", "exr", "qoi", "svg",
                 ],
             )
             .blocking_pick_file();
@@ -40,9 +40,26 @@ pub async fn pick_client_icon(app: AppHandle) -> Result<Option<String>, String> 
     .map_err(|e| format!("图标处理任务失败: {e}"))?
 }
 
-/// 任意支持格式 → 64px PNG dataURL。
-/// 保持宽高比缩到 64px 盒内(不放大小图),Lanczos3 质量最好;透明通道保留
+/// SVG 嗅探:头 1KB 内出现 <svg 标签即认定(SVG 文件可能以 <?xml 声明或注释开头)
+fn looks_like_svg(bytes: &[u8]) -> bool {
+    let head = &bytes[..bytes.len().min(1024)];
+    String::from_utf8_lossy(head).to_lowercase().contains("<svg")
+}
+
+/// 位图 → 64px PNG dataURL;SVG → 原样 base64 透传(矢量任意尺寸不失真)。
+/// 位图保持宽高比缩到 64px 盒内(不放大小图),Lanczos3 质量最好;透明通道保留
 pub fn normalize_icon(bytes: &[u8]) -> Result<String, String> {
+    if looks_like_svg(bytes) {
+        // SVG 无法像位图那样缩放压缩,设 64KB 上限(足够绝大多数图标),
+        // 与 settings 侧 dataURL 钳制口径一致
+        if bytes.len() > 64 * 1024 {
+            return Err("SVG 超过 64KB,请精简后重试".into());
+        }
+        return Ok(format!(
+            "data:image/svg+xml;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        ));
+    }
     // image crate 按内容嗅探格式(guess 兼容无扩展名/扩展名错误的文件)
     let img = image::load_from_memory(bytes).map_err(|e| format!("无法解析图片: {e}"))?;
     let (w, h) = (img.width(), img.height());
@@ -112,5 +129,25 @@ mod tests {
         img.write_to(&mut buf, image::ImageFormat::Jpeg).unwrap();
         let out = normalize_icon(buf.get_ref()).unwrap();
         assert!(out.starts_with("data:image/png;base64,"));
+    }
+
+    #[test]
+    fn svg_passthrough() {
+        // SVG 矢量原样透传:不解码、不缩放,WebView <img> 直接渲染
+        let svg = br##"<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><circle cx="12" cy="12" r="10" fill="#e91e63"/></svg>"##;
+        let out = normalize_icon(svg).unwrap();
+        assert!(out.starts_with("data:image/svg+xml;base64,"));
+        // 内容可无损还原
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(out.trim_start_matches("data:image/svg+xml;base64,"))
+            .unwrap();
+        assert_eq!(decoded, svg.to_vec());
+    }
+
+    #[test]
+    fn svg_oversize_rejected() {
+        // 超过 64KB 的 SVG 拒绝(防异常膨胀进 settings)
+        let big = format!("<svg><!--{}--></svg>", "x".repeat(70 * 1024));
+        assert!(normalize_icon(big.as_bytes()).is_err());
     }
 }

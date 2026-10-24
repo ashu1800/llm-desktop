@@ -27,29 +27,80 @@ export function fmtMs(ms: number | null | undefined): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+/** 五档色阶:0=深绿(快) → 1=浅绿 → 2=橙黄 → 3=浅红 → 4=深红(慢/异常) */
+const LADDER = [
+  "text-emerald-600 dark:text-emerald-400",
+  "text-emerald-500/70 dark:text-emerald-400/60",
+  "text-amber-500",
+  "text-red-400",
+  "text-red-600 dark:text-red-400",
+];
+
 /**
- * 耗时分档着色:绿=快 → 蓝=正常 → 橙=偏慢 → 红=慢。
- * thresholds 传三档上限(毫秒),如首字 [1000, 3000, 8000]。
+ * 耗时分档着色:深绿=快 → 浅绿=可接受 → 橙黄=偏慢 → 浅红=慢 → 深红=异常。
+ * thresholds 传四档上限(毫秒)。
  *
- * 阈值依据(2026-10 查证):
- * - 首字:信通院 2025 年度监测国内大模型 TTFT 中位数 0.58s、76% <1s
- *   (hs.china.com.cn/2026-02/11/content_43355245.html),GPT/Claude <0.5s;
- *   AI Economics 旗舰 API 约 1.0~1.3s,聊天界面 P95 应 <2s。
- *   → 绿 <1s = 优于行业中位;蓝 1~3s = 可接受(含中转/长上下文预填开销);
- *     红 ≥8s = 明显异常。
- * - 生成耗时(总耗时−首字):旗舰 API 输出速度 40~60 t/s、轻量 100+
- *   (arXiv 2504.17999:GPT-4o ≈60 t/s)。5/15/60s 分档 ≈ 250/750/3000
- *   token 输出;红 ≥60s 意味有效速度 <10 t/s——即 ITL >100ms 的明显卡顿区。
+ * 阈值依据(2026-10 拍板,按"慢 LLM/长上下文/中转"实际体验定档):
+ * - 首字 [5000, 10000, 20000, 40000]:≤5s 正常(深绿);5~10s 浅绿;
+ *   10~20s 橙黄;20~40s 浅红;≥40s 深红(明显异常)。
+ * - 生成耗时(总耗时−首字,流式):同比例阶梯,长输出场景放宽。
  */
 export function latencyColor(
   ms: number | null | undefined,
-  thresholds: [number, number, number],
+  thresholds: [number, number, number, number],
 ): string {
   if (ms == null) return "";
-  if (ms < thresholds[0]) return "text-emerald-500";
-  if (ms < thresholds[1]) return "text-sky-500";
-  if (ms < thresholds[2]) return "text-amber-500";
-  return "text-red-500";
+  return LADDER[durationSeverity(ms, thresholds)];
+}
+
+// 时长档位:低于第几档阈值(越快越靠前)
+function durationSeverity(
+  ms: number,
+  thresholds: [number, number, number, number],
+): number {
+  if (ms < thresholds[0]) return 0;
+  if (ms < thresholds[1]) return 1;
+  if (ms < thresholds[2]) return 2;
+  if (ms < thresholds[3]) return 3;
+  return 4;
+}
+
+/**
+ * 生成速度分档着色(t/s):与耗时色阶语义对齐,方向相反——快=绿,慢=红。
+ * thresholds 传四档下限:≥[0] 深绿 → ≥[1] 浅绿 → ≥[2] 橙黄 → ≥[3] 浅红,< [3] 深红。
+ * 阈值依据(2026-10 拍板):≥50 t/s 旗舰水准(深绿);20~50 良好(浅绿);
+ * 10~20 偏慢(橙黄,长上下文/推理模型常见);5~10 慢(浅红);<5 明显异常(深红,
+ * 多为超长上下文预填或上游限流)。
+ */
+export function speedColor(tps: number | null | undefined): string {
+  if (tps == null) return "";
+  if (tps >= 50) return LADDER[0];
+  if (tps >= 20) return LADDER[1];
+  if (tps >= 10) return LADDER[2];
+  if (tps >= 5) return LADDER[3];
+  return LADDER[4];
+}
+
+/**
+ * 耗时着色(流式结合速度):纯时长会把"120s 出 12K 词元"的大输出请求误判为红——
+ * 实际是健康的高速长生成。取「时长档位」与「速度档位」中**较轻**的一档:
+ * 长耗时 + 大输出(高 t/s)→ 绿;长耗时 + 小输出(低 t/s)→ 红(真卡)。
+ * 输出过少(<50 tok)时速度无统计意义,按时长单独评;非流式无速度概念同。
+ */
+export function durationColor(
+  genMs: number | null | undefined,
+  thresholds: [number, number, number, number],
+  opts?: { isStream?: boolean; completionTokens?: number },
+): string {
+  const { isStream, completionTokens } = opts ?? {};
+  if (!isStream || genMs == null || genMs <= 0 || !completionTokens) {
+    return latencyColor(genMs, thresholds);
+  }
+  // 速度档位取"低于第几档下限"的倒数(越快严重度越低),与时长档取较轻者
+  const tps = (completionTokens * 1000) / genMs;
+  const speedSeverity = tps >= 50 ? 0 : tps >= 20 ? 1 : tps >= 10 ? 2 : tps >= 5 ? 3 : 4;
+  const sev = Math.min(durationSeverity(genMs, thresholds), speedSeverity);
+  return LADDER[sev];
 }
 
 /** 时间戳 → HH:mm:ss(title 用完整日期) */

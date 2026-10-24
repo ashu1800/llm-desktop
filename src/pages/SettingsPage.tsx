@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { useSettings } from "@/hooks/use-gateway";
 import { useUpdater } from "@/hooks/use-updater";
 import { ClientMappingSettings } from "@/components/ClientMappingSettings";
+import { ProxySettings } from "@/components/ProxySettings";
 import type { AppSettings, ImportPreview, ThemeMode } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
@@ -127,6 +128,7 @@ function SectionCard({
 const SETTING_TABS = [
   { key: "gateway", label: "服务与网关" },
   { key: "app", label: "应用" },
+  { key: "proxy", label: "代理管理" },
   { key: "client", label: "客户端映射" },
   { key: "data", label: "日志与数据" },
   { key: "about", label: "关于" },
@@ -431,6 +433,15 @@ export function SettingsPage() {
               </div>
             </SectionCard>
           </>
+        )}
+
+        {tab === "proxy" && (
+          <SectionCard
+            title="代理管理"
+            description="命名代理池:供上游渠道与 GitHub 更新引用,支持 socks5 与 http/https。"
+          >
+            <ProxySettings form={form} patch={patch} />
+          </SectionCard>
         )}
 
         {tab === "client" && (

@@ -76,6 +76,9 @@ async fn add_channel_proto(
         timeout_override: None,
         breaker_override: None,
         remark: String::new(),
+        icon: String::new(),
+        price_currency: String::new(),
+        rate_rules: Vec::new(),
         created_at: 0,
         updated_at: 0,
     };
@@ -659,6 +662,9 @@ async fn gemini_models_endpoint() {
         timeout_override: None,
         breaker_override: None,
         remark: String::new(),
+        icon: String::new(),
+        price_currency: String::new(),
+        rate_rules: Vec::new(),
         created_at: 0,
         updated_at: 0,
     };

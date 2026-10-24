@@ -3,41 +3,59 @@ use sqlx::{Executor, SqlitePool};
 use crate::billing::pricing::PriceEntry;
 use crate::util::now_ms;
 
+type PriceRow = (
+    String, f64, f64, f64, f64,
+    Option<f64>, Option<f64>, Option<f64>, Option<f64>,
+);
+
 pub async fn list(pool: &SqlitePool) -> Result<Vec<PriceEntry>, String> {
-    let rows: Vec<(String, f64, f64, f64, f64, i64)> = sqlx::query_as(
-        "SELECT pattern, input, output, cache_read, cache_write, usd FROM model_prices ORDER BY id",
+    let rows: Vec<PriceRow> = sqlx::query_as(
+        "SELECT pattern, input, output, cache_read, cache_write,
+                input_usd, output_usd, cache_read_usd, cache_write_usd
+         FROM model_prices ORDER BY id",
     )
     .fetch_all(pool)
     .await
     .map_err(|e| format!("读取定价失败: {e}"))?;
     Ok(rows
         .into_iter()
-        .map(|(pattern, input, output, cache_read, cache_write, usd)| PriceEntry {
-            pattern,
-            input,
-            output,
-            cache_read,
-            cache_write,
-            usd: usd != 0,
-        })
+        .map(
+            |(pattern, input, output, cache_read, cache_write, iu, ou, cu, cwi)| PriceEntry {
+                pattern,
+                input,
+                output,
+                cache_read,
+                cache_write,
+                input_usd: iu,
+                output_usd: ou,
+                cache_read_usd: cu,
+                cache_write_usd: cwi,
+            },
+        )
         .collect())
 }
 
 pub async fn upsert(pool: impl Executor<'_, Database = sqlx::Sqlite>, p: &PriceEntry) -> Result<(), String> {
     sqlx::query(
-        "INSERT INTO model_prices (pattern, input, output, cache_read, cache_write, usd, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO model_prices (pattern, input, output, cache_read, cache_write,
+             input_usd, output_usd, cache_read_usd, cache_write_usd, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(pattern) DO UPDATE SET
            input=excluded.input, output=excluded.output,
            cache_read=excluded.cache_read, cache_write=excluded.cache_write,
-           usd=excluded.usd, updated_at=excluded.updated_at",
+           input_usd=excluded.input_usd, output_usd=excluded.output_usd,
+           cache_read_usd=excluded.cache_read_usd, cache_write_usd=excluded.cache_write_usd,
+           updated_at=excluded.updated_at",
     )
     .bind(&p.pattern)
     .bind(p.input)
     .bind(p.output)
     .bind(p.cache_read)
     .bind(p.cache_write)
-    .bind(p.usd)
+    .bind(p.input_usd)
+    .bind(p.output_usd)
+    .bind(p.cache_read_usd)
+    .bind(p.cache_write_usd)
     .bind(now_ms())
     .execute(pool)
     .await

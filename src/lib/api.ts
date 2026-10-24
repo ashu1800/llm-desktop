@@ -34,7 +34,8 @@ export const api = {
   deleteChannel: (id: number) => invoke<void>("delete_channel", { id }),
   setChannelEnabled: (id: number, enabled: boolean) =>
     invoke<void>("set_channel_enabled", { id, enabled }),
-  testChannel: (id: number) => invoke<TestChannelResult>("test_channel", { id }),
+  testChannel: (id: number, prompt?: string, model?: string) =>
+    invoke<TestChannelResult>("test_channel", { id, prompt, model }),
 
   // 密钥
   listApiKeys: () => invoke<ApiKey[]>("list_api_keys"),
@@ -68,6 +69,10 @@ export const api = {
   listLogModels: () => invoke<string[]>("list_models"),
   /** 弹图片选择框,规范化为 64px PNG dataURL;取消返回 null */
   pickClientIcon: () => invoke<string | null>("pick_client_icon"),
+  /** 经指定代理测 GitHub 延迟(ms);失败抛错 */
+  testProxyLatency: (url: string) => invoke<number>("test_proxy_latency", { url }),
+  /** 更新器应使用的代理 url(按设置 updaterProxy 名解析);null = 直连 */
+  getUpdaterProxy: () => invoke<string | null>("get_updater_proxy"),
 
   // 配置导入导出
   exportConfig: () => invoke<string | null>("export_config"),

@@ -25,6 +25,7 @@ import {
 } from "@/hooks/use-gateway";
 import {
   cacheHitRate,
+  durationColor,
   fmtFullTime,
   fmtK,
   fmtMs,
@@ -35,11 +36,13 @@ import {
   matchPrice,
   parseAttempts,
   rangeFromTs,
+  speedColor,
   TIME_RANGE_LABELS,
   type TimeRange,
 } from "@/lib/format";
 import type {
   AttemptEntry,
+  Channel,
   LogDetail,
   LogFilter,
   LogItem,
@@ -47,7 +50,6 @@ import type {
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -185,6 +187,9 @@ function LogDetailDialog({
   const isUsd = detail?.currency === "usd";
   const unit = isUsd ? "$/M" : "元/M";
   const fmtCost = isUsd ? fmtUsd : fmtYuan;
+  // 计费明细乘数:按行内币种取对应价格组(与后端 resolve_pricing 一致)
+  const priceOf = (k: "input" | "output" | "cacheRead" | "cacheWrite"): number =>
+    isUsd ? (price?.[`${k}Usd` as const] ?? 0) : (price?.[k] ?? 0);
 
   return (
     <Dialog open={id != null} onOpenChange={(o) => !o && onClose()}>
@@ -233,6 +238,7 @@ function LogDetailDialog({
               <h4 className="text-sm font-semibold">计费明细</h4>
               {detail.cost != null && price ? (
                 <div className="rounded-md border bg-muted/40 p-3 font-mono text-xs leading-6">
+                  {/* 按行内币种取对应价格组:与实际计费口径一致 */}
                   <div>
                     输入{" "}
                     {fmtK(
@@ -241,15 +247,20 @@ function LogDetailDialog({
                         detail.promptTokens - detail.cacheRead - detail.cacheWrite,
                       ),
                     )}{" "}
-                    × {price.input} {unit}
+                    × {priceOf("input")} {unit}
                   </div>
                   <div>
-                    缓存读 {fmtK(detail.cacheRead)} × {price.cacheRead} {unit} + 缓存写{" "}
-                    {fmtK(detail.cacheWrite)} × {price.cacheWrite} {unit}
+                    缓存读 {fmtK(detail.cacheRead)} × {priceOf("cacheRead")} {unit} + 缓存写{" "}
+                    {fmtK(detail.cacheWrite)} × {priceOf("cacheWrite")} {unit}
                   </div>
                   <div>
-                    输出 {fmtK(detail.completionTokens)} × {price.output} {unit}
+                    输出 {fmtK(detail.completionTokens)} × {priceOf("output")} {unit}
                   </div>
+                  {detail.rate != null && detail.rate !== 1 && (
+                    <div className="text-amber-600 dark:text-amber-400">
+                      渠道倍率 × {detail.rate}
+                    </div>
+                  )}
                   <div className="font-semibold">
                     = {fmtCost(detail.cost)}(命中定价 {price.pattern})
                   </div>
@@ -321,8 +332,18 @@ function StatusCell({ status }: { status: number }) {
 
 // ---------- 日志行 ----------
 
-function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
+function LogRow({
+  log: l,
+  channels,
+  onDetail,
+}: {
+  log: LogItem;
+  channels: Channel[] | undefined;
+  onDetail: () => void;
+}) {
   const attemptCount = parseAttempts(l.attempts).length;
+  // 渠道图标:渠道配置的 emoji/图片,按 channelName 匹配(日志冗余存名,按名查当前配置)
+  const channelIcon = channels?.find((c) => c.name === l.channelName)?.icon || null;
   // 客户端映射:设置里配置的别名与 emoji 图标;未配置走原名
   const clientAlias = useAppStore(
     (s) => (l.client && s.clientAliases[l.client]) || null,
@@ -333,19 +354,32 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
   const clientDisplay = clientAlias ?? l.client;
   return (
     <tr className="border-b text-center last:border-0 hover:bg-accent/30">
-      <td className="py-1.5 pr-2 font-mono text-xs" title={fmtFullTime(l.ts)}>
+      <td className="py-1.5 pr-0.5 font-mono text-xs" title={fmtFullTime(l.ts)}>
         {fmtTime(l.ts)}
       </td>
-      <td className="py-1.5 pr-2">
-        <div className="inline-flex items-center gap-1.5">
-          <Badge variant="secondary" className="max-w-[180px] truncate px-1.5 font-mono">
-            {l.model}
-          </Badge>
-          {l.tag && <Badge variant="outline" className="px-1.5">{l.tag}</Badge>}
-        </div>
+      <td className="py-1.5 pr-0.5">
+        <Badge variant="secondary" className="max-w-[180px] truncate px-1.5 font-mono">
+          {l.model}
+        </Badge>
       </td>
-      <td className="py-1.5 pr-2 text-sm">
+      {/* 推理等级:请求携带的 reasoning_effort(minimal/low/medium/high);无则占位 */}
+      <td className="py-1.5 pr-0.5">
+        {l.tag ? (
+          <Badge variant="outline" className="px-1.5">
+            {l.tag}
+          </Badge>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        )}
+      </td>
+      <td className="py-1.5 pr-0.5 text-sm">
         <span className="inline-flex items-center gap-1">
+          {channelIcon &&
+            (channelIcon.startsWith("data:image/") ? (
+              <img src={channelIcon} alt="" className="h-4 w-4 object-contain" />
+            ) : (
+              <span className="text-sm leading-none">{channelIcon}</span>
+            ))}
           <span className="h-1.5 w-1.5 rounded-full bg-primary/60" />
           {l.channelName ?? "—"}
           {attemptCount > 1 && (
@@ -355,8 +389,8 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
           )}
         </span>
       </td>
-      <td className="py-1.5 pr-2 font-mono text-xs leading-5">
-        <div className="flex items-center justify-center gap-2.5">
+      <td className="py-1.5 pr-0.5 font-mono text-xs leading-5">
+        <div className="flex items-center justify-center gap-3">
           <span
             className="text-orange-500"
             title={`总输入 ${fmtK(l.promptTokens)}(含缓存)`}
@@ -373,31 +407,35 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
           <span className="text-emerald-500" title="缓存命中词元">
             {fmtK(l.cacheRead)}
           </span>
-          <span className="text-sky-500">
+          {/* 命中率与命中量同色:同一语义(缓存命中)保持视觉一致 */}
+          <span className="text-emerald-500">
             {cacheHitRate(l.cacheRead, l.promptTokens)}
           </span>
         </div>
       </td>
       {/* 任务耗时:单元格保持左对齐;首字/生成耗时按快慢分档着色;非流式整块淡色 */}
-      <td className={cn("py-1.5 pr-2 text-left font-mono text-xs leading-4", !l.isStream && "text-muted-foreground")}>
+      <td className={cn("py-1.5 pr-0.5 text-left font-mono text-xs leading-4", !l.isStream && "text-muted-foreground")}>
         <div>
           <div className="flex items-center gap-1.5">
             <span className="h-3 w-0.5 shrink-0 rounded-full bg-zinc-400" />
             <span className="text-muted-foreground">首字</span>
-            <span className={latencyColor(l.ttftMs, [1000, 3000, 8000])}>
+            <span className={latencyColor(l.ttftMs, [5000, 10000, 20000, 40000])}>
               {l.isStream ? fmtMs(l.ttftMs) : "—"}
             </span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className="h-3 w-0.5 shrink-0 rounded-full bg-sky-500" />
             <span className="text-muted-foreground">耗时</span>
-            {/* 评估生成耗时 = 总耗时 − 首字(流式,夹 0);非流式无首字概念,直接评总耗时 */}
+            {/* 生成耗时 = 总耗时 − 首字(流式,夹 0);非流式直接评总耗时。
+                流式结合输出速度取较轻档:120s 出 12K 词元是健康长生成,
+                不应仅因时长被判红 */}
             <span
-              className={latencyColor(
+              className={durationColor(
                 l.isStream && l.ttftMs != null
                   ? Math.max(0, (l.totalMs ?? 0) - l.ttftMs)
                   : l.totalMs,
-                [5000, 15000, 60000],
+                [15000, 30000, 60000, 120000],
+                { isStream: l.isStream, completionTokens: l.completionTokens },
               )}
             >
               {fmtMs(l.totalMs)}
@@ -406,13 +444,14 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
           <div className="flex items-center gap-1.5">
             <span className="h-3 w-0.5 shrink-0 rounded-full bg-violet-500" />
             <span className="text-muted-foreground">速度</span>
-            <span>
+            {/* 无速度(非流式/异常置空)保持默认色 */}
+            <span className={speedColor(l.speed)}>
               {l.isStream && l.speed != null ? l.speed.toFixed(1) : "—"}
             </span>
           </div>
         </div>
       </td>
-      <td className="py-1.5 pr-2 font-mono text-xs">
+      <td className="py-1.5 pr-0.5 font-mono text-xs">
         {l.cost != null && (
           <span title={l.estimated ? "usage 为本地估算" : undefined}>
             {l.estimated ? "~" : ""}
@@ -421,10 +460,10 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
         )}
         {l.cost == null && <span className="text-muted-foreground">—</span>}
       </td>
-      <td className="py-1.5 pr-2">
+      <td className="py-1.5 pr-0.5">
         <StatusCell status={l.status} />
       </td>
-      <td className="py-1.5 pr-2">
+      <td className="py-1.5 pr-0.5">
         {l.keyName ? (
           <Badge variant="outline" className="px-1.5">
             {l.keyName}
@@ -434,7 +473,7 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
         )}
       </td>
       <td
-        className="max-w-[110px] truncate py-1.5 pr-2 text-xs text-muted-foreground"
+        className="max-w-[110px] truncate py-1.5 pr-0.5 text-xs text-muted-foreground"
         title={l.client ?? undefined}
       >
         {clientDisplay ? (
@@ -664,10 +703,7 @@ export function DashboardPage() {
       {/* 请求日志表(原"请求日志"页并入);min-h-0 允许 flex 收缩,内滚容器占满剩余高度 */}
       <Card className="flex min-h-0 flex-1 flex-col">
         <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
-          <div>
-            <CardTitle className="text-base">请求日志</CardTitle>
-            <CardDescription>共 {total} 条</CardDescription>
-          </div>
+          <CardTitle className="text-base">请求日志</CardTitle>
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <Button
               variant="ghost"
@@ -714,21 +750,27 @@ export function DashboardPage() {
               <thead className="sticky top-0 z-10 bg-card">
                 {/* 任务耗时列特殊:内容与表头均左对齐(竖条锚点行),其余列居中 */}
                 <tr className="border-b text-center text-xs text-muted-foreground">
-                  <th className="py-2 pr-2 font-medium">时间</th>
-                  <th className="py-2 pr-2 font-medium">模型</th>
-                  <th className="py-2 pr-2 font-medium">渠道</th>
-                  <th className="py-2 pr-2 font-medium">词元</th>
-                  <th className="py-2 pr-2 text-left font-medium">任务耗时</th>
-                  <th className="py-2 pr-2 font-medium">费用</th>
-                  <th className="py-2 pr-2 font-medium">状态</th>
-                  <th className="py-2 pr-2 font-medium">密钥</th>
-                  <th className="py-2 pr-2 font-medium">客户端</th>
+                  <th className="py-2 pr-0.5 font-medium">时间</th>
+                  <th className="py-2 pr-0.5 font-medium">模型</th>
+                  <th className="py-2 pr-0.5 font-medium">推理</th>
+                  <th className="py-2 pr-0.5 font-medium">渠道</th>
+                  <th className="py-2 pr-0.5 font-medium">词元</th>
+                  <th className="py-2 pr-0.5 text-left font-medium">任务耗时</th>
+                  <th className="py-2 pr-0.5 font-medium">费用</th>
+                  <th className="py-2 pr-0.5 font-medium">状态</th>
+                  <th className="py-2 pr-0.5 font-medium">密钥</th>
+                  <th className="py-2 pr-0.5 font-medium">客户端</th>
                   <th className="py-2 font-medium">操作</th>
                 </tr>
               </thead>
               <tbody>
                 {items.map((l) => (
-                  <LogRow key={l.id} log={l} onDetail={() => setDetailId(l.id)} />
+                  <LogRow
+                    key={l.id}
+                    log={l}
+                    channels={channels}
+                    onDetail={() => setDetailId(l.id)}
+                  />
                 ))}
               </tbody>
             </table>

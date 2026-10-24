@@ -87,6 +87,9 @@ mod tests {
             timeout_override: None,
             breaker_override: None,
             remark: "r".into(),
+            icon: "🤖".into(),
+            price_currency: "cny".into(),
+            rate_rules: Vec::new(),
             created_at: 0,
             updated_at: 0,
         };
@@ -95,6 +98,7 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].api_keys.len(), 2);
         assert_eq!(listed[0].model_map.get("gpt").unwrap(), "gpt-4o");
+        assert_eq!(listed[0].icon, "🤖");
 
         ch.name = "改名".into();
         crate::store::channels::update(&pool, &ch).await.unwrap();
@@ -124,11 +128,17 @@ mod tests {
             output: 2.0,
             cache_read: 0.1,
             cache_write: 0.2,
-            usd: false,
+            input_usd: Some(0.1),
+            output_usd: None,
+            cache_read_usd: None,
+            cache_write_usd: None,
         };
         crate::store::prices::upsert(&pool, &price).await.unwrap();
         crate::store::prices::upsert(&pool, &price).await.unwrap(); // upsert 幂等
-        assert_eq!(crate::store::prices::list(&pool).await.unwrap().len(), 1);
+        let listed = crate::store::prices::list(&pool).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        // 双币种字段持久化往返
+        assert_eq!(listed[0].input_usd, Some(0.1));
 
         std::fs::remove_dir_all(&dir).ok();
     }

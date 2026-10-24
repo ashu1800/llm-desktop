@@ -21,8 +21,20 @@ pub struct AppSettings {
     pub client_aliases: HashMap<String, String>,
     /// 客户端图标映射:键 = 原名,值 = emoji(前端渲染在名称前)
     pub client_icons: HashMap<String, String>,
+    /// 命名代理池:渠道与更新器引用;url 需带 scheme(socks5:// 或 http(s)://)
+    pub proxies: Vec<ProxyEntry>,
+    /// GitHub 更新检查/下载使用的代理名;None/空 = 直连
+    pub updater_proxy: String,
     pub breaker: BreakerDefaults,
     pub timeouts: TimeoutDefaults,
+}
+
+/// 命名代理条目
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyEntry {
+    pub name: String,
+    pub url: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -68,6 +80,8 @@ impl Default for AppSettings {
             language: "zh-CN".into(),
             client_aliases: HashMap::new(),
             client_icons: HashMap::new(),
+            proxies: Vec::new(),
+            updater_proxy: String::new(),
             breaker: BreakerDefaults::default(),
             timeouts: TimeoutDefaults::default(),
         }
@@ -130,8 +144,8 @@ impl AppSettings {
         self.timeouts.stream_idle_secs = self.timeouts.stream_idle_secs.clamp(5, 3600);
         self.timeouts.non_stream_total_secs = self.timeouts.non_stream_total_secs.clamp(5, 7200);
         // 客户端映射清理:空显示名视为删除该条目;键值超长截断防滥用。
-        // 图标值两种形态:emoji(≤8 字符)或图片 dataURL(规范命令固定输出 64px PNG,
-        // 数 KB;上限 16KB 拦截异常膨胀,超限视为无效删除)
+        // 图标值两种形态:emoji(≤8 字符)或图片 dataURL(位图经规范命令固定输出
+        // 64px PNG 数 KB;SVG 上限 64KB;此处 64KB 统一拦截异常膨胀,超限视为无效删除)
         let cut = |s: &str, max: usize| -> String { s.chars().take(max).collect() };
         self.client_aliases = self
             .client_aliases
@@ -149,7 +163,7 @@ impl AppSettings {
             .map(|(k, v)| {
                 let v = v.trim();
                 let v = if v.starts_with("data:image/") {
-                    if v.len() <= 16 * 1024 { v } else { "" }
+                    if v.len() <= 64 * 1024 { v } else { "" }
                 } else {
                     &v[..v.chars().take(8).map(|c| c.len_utf8()).sum()]
                 };
@@ -157,6 +171,34 @@ impl AppSettings {
             })
             .filter(|(_, v)| !v.is_empty())
             .collect();
+        // 代理池清理:去无名/无 url 条目;名字去重(后值覆盖);url 必须带
+        // socks5:// 或 http(s):// scheme,否则该条目无效删除
+        let mut seen = std::collections::HashSet::new();
+        self.proxies = self
+            .proxies
+            .iter()
+            .filter_map(|p| {
+                let name = p.name.trim().to_string();
+                let url = p.url.trim().to_string();
+                if name.is_empty() || url.is_empty() || seen.contains(&name) {
+                    return None;
+                }
+                let ok = url.starts_with("socks5://")
+                    || url.starts_with("http://")
+                    || url.starts_with("https://");
+                if !ok {
+                    return None;
+                }
+                seen.insert(name.clone());
+                Some(ProxyEntry { name, url })
+            })
+            .collect();
+        // 更新器代理引用不存在的名字时清空(直连)
+        if !self.updater_proxy.is_empty()
+            && !self.proxies.iter().any(|p| p.name == self.updater_proxy)
+        {
+            self.updater_proxy = String::new();
+        }
         self
     }
 }

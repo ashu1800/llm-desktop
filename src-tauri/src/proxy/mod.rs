@@ -143,20 +143,7 @@ pub async fn gemini_models(
         Ok(k) => k,
         Err(e) => return e.render(EntryProto::Gemini),
     };
-    let all = util::read_ok(&state.channels).clone();
-    let mut models: Vec<String> = Vec::new();
-    for cid in &key.channels {
-        if let Some(ch) = all.iter().find(|c| &c.id == cid) {
-            if ch.enabled && !ch.models.is_empty() {
-                for m in &ch.models {
-                    if !models.contains(m) {
-                        models.push(m.clone());
-                    }
-                }
-            }
-        }
-    }
-    models.sort();
+    let models = key_model_list(&state, &key);
     (StatusCode::OK, axum::Json(list_models_gemini_body(&models))).into_response()
 }
 
@@ -442,7 +429,7 @@ async fn gateway_inner(
                 client: &client_ua,
                 req_snapshot,
                 resp_snapshot: Some(truncate_snapshot(&state, &err_body)),
-            });
+            }).await;
             let mut r = passthrough_error_response(status, &err_body, &up_content_type);
             add_gw_headers(&mut r, &ch.name, attempts.len());
             return r;
@@ -487,7 +474,7 @@ async fn gateway_inner(
         client: &client_ua,
         req_snapshot,
         resp_snapshot: None,
-    });
+    }).await;
     GatewayError::service_unavailable(summary).render(entry)
 }
 
@@ -642,20 +629,53 @@ async fn send_upstream(
     Ok(resp)
 }
 
-/// HTTP 客户端按 (代理配置, 连接超时) 缓存复用连接池
+/// HTTP 客户端按 (代理配置, 连接超时) 缓存复用连接池。
+/// proxy 支持 `proxy:<name>` 形式引用设置里的命名代理池(发请求时解析,
+/// 代理地址变更后新请求立即生效;引用不存在时视为跟随系统并告警)
 fn http_client(
     state: &AppState,
     proxy: &Option<String>,
     connect_secs: u64,
 ) -> Result<reqwest::Client, String> {
-    let cache_key = format!("{}|{connect_secs}", proxy.clone().unwrap_or_default());
+    // 先解引用:proxy:<name> → 实际 url,后续按 url 走统一缓存/构建路径
+    let resolved: Option<String> = match proxy.as_deref() {
+        Some(p) if p.starts_with("proxy:") => {
+            let name = &p[6..];
+            let url = {
+                let settings = crate::util::read_ok(&state.settings);
+                settings
+                    .proxies
+                    .iter()
+                    .find(|e| e.name == name)
+                    .map(|e| e.url.clone())
+            };
+            match url {
+                Some(u) => Some(u),
+                None => {
+                    log::warn!("渠道引用的命名代理「{name}」不存在,本次请求跟随系统代理");
+                    None
+                }
+            }
+        }
+        other => other.map(str::to_string),
+    };
+    // 哨兵区分 None(跟随系统)与 Some("")(直连):两者构建语义不同,
+    // 共享缓存下 unwrap_or_default 会让后构建者拿到错误语义的 client
+    let cache_key = format!(
+        "{}|{connect_secs}",
+        match resolved.as_deref() {
+            None => "\u{0}system",
+            Some("") => "\u{0}direct",
+            Some(url) => url,
+        }
+    );
     if let Some(c) = util::lock_ok(&state.http).get(&cache_key) {
         return Ok(c.clone());
     }
     let mut builder = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(connect_secs))
         .user_agent(concat!("LLM-Gateway/", env!("CARGO_PKG_VERSION")));
-    builder = match proxy.as_deref() {
+    builder = match resolved.as_deref() {
         None => builder, // 默认:跟随系统代理(reqwest 自动读取环境变量)
         Some("") => builder.no_proxy(),
         Some(url) => builder.proxy(
@@ -858,7 +878,7 @@ async fn handle_non_stream(
         client: client_ua,
         req_snapshot,
         resp_snapshot: Some(truncate_snapshot(state, rendered.to_string().as_str())),
-    });
+    }).await;
 
     let mut response = (StatusCode::OK, axum::Json(rendered)).into_response();
     add_gw_headers(&mut response, &ch.name, attempts.len());
@@ -957,17 +977,20 @@ async fn start_stream(
     let entry2 = entry;
 
     let on_done = Box::new(move |o: StreamOutcome| {
-        let usage = match o.usage {
-            Some(u) => u,
-            None => {
-                let mut text = o.output_text.clone();
-                for (_, name, args) in &o.tool_calls {
-                    text.push_str(name);
-                    text.push_str(args);
+        // finalize_log 现为 async(倍率规则含节假日外呼):闭包保持同步签名,
+        // 丢到运行时后台执行——日志/计费收尾不阻塞响应流收尾
+        tauri::async_runtime::spawn(async move {
+            let usage = match o.usage {
+                Some(u) => u,
+                None => {
+                    let mut text = o.output_text.clone();
+                    for (_, name, args) in &o.tool_calls {
+                        text.push_str(name);
+                        text.push_str(args);
+                    }
+                    billing::estimate::estimate_usage(&ir2, &text)
                 }
-                billing::estimate::estimate_usage(&ir2, &text)
-            }
-        };
+            };
         // Responses:从结构化输出重建 blocks 写 LRU
         if let Some((rid, context)) = completion {
             let mut out_blocks: Vec<Block> = Vec::new();
@@ -1001,31 +1024,31 @@ async fn start_stream(
                 .collect();
             resp_text.push_str(&format!("\n[tool_calls] {}", joined.join(", ")));
         }
-        finalize_log(FinalizeInput {
-            state: &state2,
-            key: Some(&key2),
-            channel: Some(&ch2),
-            model_in: &model_in2,
-            mapped: Some(&mapped2),
-            tag: tag2,
-            protocol_in: entry2,
-            protocol_up: Some(ch2.protocol),
-            status: 200,
-            is_stream: true,
-            attempts: attempts2.clone(),
-            error: o.error,
-            usage,
-            estimated: o.usage.is_none(),
-            ttft_ms: Some(o.ttft_ms),
-            started: started2,
-            client: &client2,
-            req_snapshot: req_snap2,
-            resp_snapshot: Some(truncate_snapshot(&state2, &resp_text)),
+            finalize_log(FinalizeInput {
+                state: &state2,
+                key: Some(&key2),
+                channel: Some(&ch2),
+                model_in: &model_in2,
+                mapped: Some(&mapped2),
+                tag: tag2,
+                protocol_in: entry2,
+                protocol_up: Some(ch2.protocol),
+                status: 200,
+                is_stream: true,
+                attempts: attempts2.clone(),
+                error: o.error,
+                usage,
+                estimated: o.usage.is_none(),
+                ttft_ms: Some(o.ttft_ms),
+                started: started2,
+                client: &client2,
+                req_snapshot: req_snap2,
+                resp_snapshot: Some(truncate_snapshot(&state2, &resp_text)),
+            })
+            .await;
         });
     });
-
-    let body = relay::start_relay(
-        bstream,
+    let body = relay::start_relay(        bstream,
         first_chunk,
         passthrough,
         ch.protocol,
@@ -1050,6 +1073,42 @@ async fn start_stream(
 // 模型列表(双格式自适应)与工具函数
 // ---------------------------------------------------------------------------
 
+/// 聚合该密钥可用渠道的模型清单(排序去重)。
+/// 渠道"模型不限"(models 为空)时无从枚举,用定价表全量模型兜底——
+/// 定价表即用户声明可计费的模型全集;否则空列表会让严格客户端直接判定不可用
+fn key_model_list(state: &AppState, key: &auth::AuthedKey) -> Vec<String> {
+    let all = util::read_ok(&state.channels).clone();
+    let price_models = {
+        let prices = util::read_ok(&state.prices);
+        prices
+            .rows
+            .iter()
+            .filter(|r| !r.pattern.ends_with('*'))
+            .map(|r| r.pattern.clone())
+            .collect::<Vec<_>>()
+    };
+    let mut models: Vec<String> = Vec::new();
+    for cid in &key.channels {
+        if let Some(ch) = all.iter().find(|c| &c.id == cid) {
+            if !ch.enabled {
+                continue;
+            }
+            let source: &Vec<String> = if ch.models.is_empty() {
+                &price_models
+            } else {
+                &ch.models
+            };
+            for m in source {
+                if !models.contains(m) {
+                    models.push(m.clone());
+                }
+            }
+        }
+    }
+    models.sort();
+    models
+}
+
 pub async fn list_models(
     State(state): State<AppState>,
     Query(q): Query<HashMap<String, String>>,
@@ -1066,20 +1125,7 @@ pub async fn list_models(
             return e.render(entry);
         }
     };
-    let all = util::read_ok(&state.channels).clone();
-    let mut models: Vec<String> = Vec::new();
-    for cid in &key.channels {
-        if let Some(ch) = all.iter().find(|c| &c.id == cid) {
-            if ch.enabled && !ch.models.is_empty() {
-                for m in &ch.models {
-                    if !models.contains(m) {
-                        models.push(m.clone());
-                    }
-                }
-            }
-        }
-    }
-    models.sort();
+    let models = key_model_list(&state, &key);
 
     // x-api-key 头(无 Bearer)→ Anthropic list_models 格式;否则 OpenAI 格式
     let has_bearer = headers
@@ -1355,11 +1401,14 @@ pub struct FinalizeInput<'a> {
     pub resp_snapshot: Option<String>,
 }
 
-fn finalize_log(input: FinalizeInput) {
+async fn finalize_log(input: FinalizeInput<'_>) {
+    // 立即 clone 渠道:调用方传入的 &Channel 借自 RwLockReadGuard,
+    // async 函数 await 时 guard 跨悬挂点会让 future 不满足 Send
+    let channel_owned: Option<Channel> = input.channel.cloned();
     let FinalizeInput {
         state,
         key,
-        channel,
+        channel: _,
         model_in,
         mapped,
         tag,
@@ -1377,28 +1426,63 @@ fn finalize_log(input: FinalizeInput) {
         req_snapshot,
         resp_snapshot,
     } = input;
+    let channel = channel_owned.as_ref();
 
     let total_ms = started.elapsed().as_millis() as i64;
+    // 生成速度 = 输出词元 ÷ 生成耗时(总耗时 − 首字):
+    // 首字等待不算生成时间,否则慢首字模型的速度被严重低估
+    // (例:首字 4.7s + 生成 0.4s 出 47 tok → 正确 ≈117.5 t/s,旧公式仅 9.2)。
+    // 超过 PHYSICS_MAX 的一律置 None 显示 "-":非流式误标/usage 异常/时钟抖动
+    // 算出物理不可能的速度,展示出来只会误导
+    const PHYSICS_MAX_TPS: f64 = 2000.0;
     let speed = if is_stream && total_ms > 0 {
-        Some(usage.completion as f64 * 1000.0 / total_ms as f64)
+        let gen_ms = ttft_ms.map(|t| (total_ms - t).max(1)).unwrap_or(total_ms);
+        let tps = usage.completion as f64 * 1000.0 / gen_ms as f64;
+        (tps <= PHYSICS_MAX_TPS).then_some(tps)
     } else {
         None
     };
 
-    // 计价:入口模型名优先,无匹配回退映射名
-    let prices = util::read_ok(&state.prices);
-    let price = prices
-        .match_for(model_in)
-        .or_else(|| mapped.and_then(|m| prices.match_for(m)))
-        .cloned();
-    drop(prices);
+    // 计价:入口模型名优先,无匹配回退映射名;币种由**渠道**决定(渠道选 usd
+    // 但该模型未配美元价时回退人民币,宁可低估不中断请求)。
+    // 块作用域包 guard:async fn 中 drop 后的变量槽仍可能被视作跨 await 持有,
+    // 显式作用域确保 ReadGuard 在第一个 await 前真正结束生命周期
+    let price = {
+        let prices = util::read_ok(&state.prices);
+        prices
+            .match_for(model_in)
+            .or_else(|| mapped.and_then(|m| prices.match_for(m)))
+            .cloned()
+    };
     let success = (200..300).contains(&status) && error.is_none();
-    let cost = price.as_ref().map(|p| billing::compute_cost(p, &usage));
-    let unpriced = success && cost.is_none();
-    // 币种随定价条目:美元条目按微美元记账,与人民币分列统计
-    let currency = price
+    let channel_currency = channel
+        .map(|c| billing::Currency::parse(&c.price_currency))
+        .unwrap_or(billing::Currency::Cny);
+    let billing = price.as_ref().map(|p| billing::resolve_pricing(p, channel_currency));
+    let base_cost = billing
         .as_ref()
-        .map(|p| billing::currency_of(p).as_str().to_string())
+        .map(|(prices, _)| billing::compute_cost(*prices, &usage));
+    // 渠道倍率规则:按模型/日类型/时段命中后乘算(默认 1.0)。
+    // 只解析一次:两次独立 now() 在时段/午夜边界可能算出不同倍率,
+    // 导致"费用按旧倍率乘、展示按新倍率标"的不一致。
+    // 零费用请求(4xx/空 usage)跳过:倍率 0×N=0 无意义,还避免失败请求
+    // 触发节假日外呼拖慢错误响应
+    let (cost, rate_applied): (Option<i64>, Option<f64>) = match (base_cost, channel) {
+        (Some(c), Some(ch))
+            if !ch.rate_rules.is_empty() && c > 0 && success =>
+        {
+            // 按入口模型名匹配(与日志 model 列一致,用户看日志配规则可直接复现);
+            // 无映射时入口名即上游名,行为不变
+            let ctx = billing::rate::RateContext::new(model_in, chrono::Local::now());
+            let rate = billing::rate::resolve_rate(&ch.rate_rules, &ctx).await;
+            (Some(billing::rate::scale_cost(c, rate)), Some(rate))
+        }
+        (other, _) => (other, None),
+    };
+    let unpriced = success && cost.is_none();
+    let currency = billing
+        .as_ref()
+        .map(|(_, cur)| cur.as_str().to_string())
         .unwrap_or_else(|| billing::Currency::Cny.as_str().to_string());
 
     let entry = RequestLog {
@@ -1426,6 +1510,8 @@ fn finalize_log(input: FinalizeInput) {
         speed,
         cost,
         currency,
+        // 倍率 1.0 视为无倍率,不落字段(减少噪音)
+        rate: rate_applied.filter(|r| *r != 1.0),
         client: Some(util::ua_to_client(client)),
         req_snapshot,
         resp_snapshot,

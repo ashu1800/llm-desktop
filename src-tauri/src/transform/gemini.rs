@@ -433,19 +433,13 @@ pub fn render_request(ir: &CanonicalRequest) -> (Value, Vec<String>) {
 // ---------------------------------------------------------------------------
 
 pub fn parse_usage(u: &Value) -> Usage {
+    // 负值钳 0:三协议统一口径,防异常上游污染计费
+    let clamp = |v: Option<i64>| v.unwrap_or(0).max(0);
     Usage {
-        prompt: u.get("promptTokenCount").and_then(Value::as_i64).unwrap_or(0),
-        completion: u
-            .get("candidatesTokenCount")
-            .and_then(Value::as_i64)
-            .unwrap_or(0)
-            + u.get("thoughtsTokenCount")
-                .and_then(Value::as_i64)
-                .unwrap_or(0),
-        cache_read: u
-            .get("cachedContentTokenCount")
-            .and_then(Value::as_i64)
-            .unwrap_or(0),
+        prompt: clamp(u.get("promptTokenCount").and_then(Value::as_i64)),
+        completion: clamp(u.get("candidatesTokenCount").and_then(Value::as_i64))
+            + clamp(u.get("thoughtsTokenCount").and_then(Value::as_i64)),
+        cache_read: clamp(u.get("cachedContentTokenCount").and_then(Value::as_i64)),
         cache_write: 0,
     }
 }

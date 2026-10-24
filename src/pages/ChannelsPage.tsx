@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   Cable,
+  ImagePlus,
   Loader2,
   Pencil,
   Plus,
@@ -12,12 +13,15 @@ import {
   Zap,
 } from "lucide-react";
 import { api, maskKey } from "@/lib/api";
-import { useBreakerStates, useChannels } from "@/hooks/use-gateway";
-import type { Channel, UpstreamProto } from "@/lib/types";
+import {
+  useBreakerStates,
+  useChannels,
+  useSettings,
+} from "@/hooks/use-gateway";
+import type { Channel, RateRule, TestChannelResult, UpstreamProto } from "@/lib/types";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -63,6 +67,9 @@ function emptyChannel(): Channel {
     timeoutOverride: null,
     breakerOverride: null,
     remark: "",
+    icon: "",
+    priceCurrency: "cny",
+    rateRules: [],
     createdAt: 0,
     updatedAt: 0,
   };
@@ -141,6 +148,123 @@ function ModelMapEditor({
   );
 }
 
+// ---------- 计费倍率规则编辑器 ----------
+
+const DAY_TYPE_OPTIONS: { value: string; label: string }[] = [
+  { value: "all", label: "每天" },
+  { value: "workday", label: "工作日" },
+  { value: "weekend", label: "周末" },
+  { value: "holiday", label: "法定节假日" },
+];
+
+function RateRuleEditor({
+  value,
+  onChange,
+}: {
+  value: RateRule[];
+  onChange: (v: RateRule[]) => void;
+}) {
+  const rules = value ?? [];
+  const patch = (i: number, p: Partial<RateRule>) => {
+    const next = [...rules];
+    next[i] = { ...next[i], ...p };
+    onChange(next);
+  };
+  const fmtRule = (r: RateRule) => {
+    const model = r.model.trim() || "全部模型";
+    const day = DAY_TYPE_OPTIONS.find((d) => d.value === r.dayType)?.label ?? r.dayType;
+    const time = r.timeRange.trim() ? ` ${r.timeRange}` : "";
+    return `${model} · ${day}${time} · ×${r.rate}`;
+  };
+
+  return (
+    <div className="space-y-1.5">
+      {rules.map((r, i) => (
+        <div key={i} className="space-y-1 rounded-lg border bg-muted/30 px-2.5 py-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Input
+              value={r.model}
+              onChange={(e) => patch(i, { model: e.target.value })}
+              placeholder="模型(gpt* 通配,空=全部)"
+              className="h-7 w-40 font-mono text-xs"
+            />
+            <span className="text-xs text-muted-foreground">×</span>
+            <Input
+              type="number"
+              min="0"
+              max="100"
+              step="0.1"
+              value={r.rate}
+              // 可完整解析才写回:"0." 等中间态若回写 Number() 会折叠成 0,
+              // 受控 value 重置吞掉小数点,继续输入变 "05"→5(计费放大 10 倍)
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v !== "" && Number.isFinite(Number(v))) patch(i, { rate: Number(v) });
+              }}
+              onBlur={(e) => {
+                // 失焦归一:清空/非法回 1(与后端钳制一致)
+                const n = Number(e.target.value);
+                if (e.target.value === "" || !Number.isFinite(n)) patch(i, { rate: 1 });
+              }}
+              className="h-7 w-16 text-xs"
+            />
+            <Select value={r.dayType || "all"} onValueChange={(v) => patch(i, { dayType: v })}>
+              <SelectTrigger className="h-7 w-28 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {DAY_TYPE_OPTIONS.map((d) => (
+                  <SelectItem key={d.value} value={d.value}>
+                    {d.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Input
+              value={r.timeRange}
+              onChange={(e) => patch(i, { timeRange: e.target.value })}
+              placeholder="HH:MM-HH:MM(可选)"
+              className="h-7 w-32 font-mono text-xs"
+            />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="ml-auto h-7 w-7 text-muted-foreground hover:text-destructive"
+              title="删除规则"
+              onClick={() => onChange(rules.filter((_, j) => j !== i))}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+          <Input
+            value={r.remark}
+            onChange={(e) => patch(i, { remark: e.target.value })}
+            placeholder="备注,如:春节 5 折"
+            className="h-6 w-full border-0 bg-transparent px-0 text-xs shadow-none focus-visible:ring-0"
+            maxLength={30}
+          />
+        </div>
+      ))}
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-7 gap-1 px-2 text-xs"
+        onClick={() =>
+          onChange([...rules, { model: "", rate: 1, dayType: "all", timeRange: "", remark: "" }])
+        }
+      >
+        <Plus className="h-3 w-3" /> 添加倍率规则
+      </Button>
+      {rules.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          请求按规则从上到下匹配,命中多条时以最后一条为准;费用 = 定价 × 倍率。
+          已配置:{rules.map(fmtRule).join(" / ")}
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ---------- 渠道编辑 Dialog ----------
 
 function ChannelDialog({
@@ -154,6 +278,12 @@ function ChannelDialog({
 }) {
   const qc = useQueryClient();
   const [form, setForm] = useState<Channel | null>(editing);
+  const [pickingIcon, setPickingIcon] = useState(false);
+  // 命名代理池(设置-代理管理):下拉引用,存 proxy:<name> 形式
+  const { data: settings } = useSettings();
+  const namedProxies = settings?.proxies ?? [];
+  const namedByCaseUrl = (url: string) =>
+    namedProxies.find((p) => p.url === url);
   useEffect(() => setForm(editing), [editing]);
 
   const saveMutation = useMutation({
@@ -173,6 +303,19 @@ function ChannelDialog({
   if (!form) return null;
   const patch = (p: Partial<Channel>) => setForm({ ...form, ...p });
   const valid = form.name.trim() && form.baseUrl.trim();
+  const isImageIcon = form.icon.startsWith("data:image/");
+
+  const pickIcon = async () => {
+    setPickingIcon(true);
+    try {
+      const dataUrl = await api.pickClientIcon();
+      if (dataUrl) patch({ icon: dataUrl });
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setPickingIcon(false);
+    }
+  };
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
@@ -187,11 +330,65 @@ function ChannelDialog({
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label>名称</Label>
-              <Input
-                value={form.name}
-                onChange={(e) => patch({ name: e.target.value })}
-                placeholder="例如:主力中转站"
-              />
+              <div className="flex items-center gap-2">
+                {/* 图标预览:emoji/图片渲染,空显示首字符占位 */}
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-muted/40 text-lg leading-none">
+                  {form.icon ? (
+                    isImageIcon ? (
+                      <img src={form.icon} alt="" className="h-full w-full object-contain" />
+                    ) : (
+                      <span>{form.icon}</span>
+                    )
+                  ) : (
+                    <span className="text-xs text-muted-foreground">
+                      {form.name.trim().charAt(0).toUpperCase() || "?"}
+                    </span>
+                  )}
+                </div>
+                <Input
+                  value={form.name}
+                  onChange={(e) => patch({ name: e.target.value })}
+                  placeholder="例如:主力中转站"
+                />
+              </div>
+              {/* 图标设置:emoji 输入与图片选择互斥,图片优先 */}
+              <div className="flex items-center gap-2">
+                {isImageIcon ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 gap-1 px-2 text-xs"
+                    onClick={() => patch({ icon: "" })}
+                  >
+                    移除图片图标
+                  </Button>
+                ) : (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 gap-1 px-2 text-xs"
+                      disabled={pickingIcon}
+                      onClick={pickIcon}
+                    >
+                      {pickingIcon ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <ImagePlus className="h-3 w-3" />
+                      )}
+                      图片
+                    </Button>
+                    <Input
+                      value={form.icon}
+                      onChange={(e) => patch({ icon: e.target.value })}
+                      placeholder="或输入 emoji"
+                      // 粘贴的 dataURL 通常超 4 字符:图片态放开限制整体接纳,
+                      // emoji 态维持 4 字符
+                      maxLength={form.icon.startsWith("data:image/") ? 100_000 : 4}
+                    />
+                  </>
+                )}
+              </div>
             </div>
             <div className="space-y-1.5">
               <Label>协议类型</Label>
@@ -209,6 +406,29 @@ function ChannelDialog({
                 </SelectContent>
               </Select>
             </div>
+            <div className="space-y-1.5">
+              {/* 计费币种:该渠道的请求按哪套价格记账(usd 模型未配美元价时回退人民币) */}
+              <Label>计费币种</Label>
+              <Select
+                value={form.priceCurrency || "cny"}
+                onValueChange={(v) => patch({ priceCurrency: v })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="cny">人民币 ¥</SelectItem>
+                  <SelectItem value="usd">美元 $</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label>计费倍率(默认 1;可按模型/节假日/工作日/时段设置)</Label>
+            <RateRuleEditor
+              value={form.rateRules ?? []}
+              onChange={(v) => patch({ rateRules: v })}
+            />
           </div>
           <div className="space-y-1.5">
             <Label>Base URL</Label>
@@ -262,10 +482,31 @@ function ChannelDialog({
             <div className="space-y-1.5">
               <Label>代理设置</Label>
               <Select
-                value={form.proxy === null ? "system" : form.proxy === "" ? "direct" : "custom"}
+                value={
+                  form.proxy === null
+                    ? "system"
+                    : form.proxy === ""
+                      ? "direct"
+                      : form.proxy.startsWith("proxy:")
+                        ? `named:${form.proxy.slice(6)}`
+                        // 旧数据(直接存命名代理 url)按 url 反查名字,避免升级后
+                        // 下拉跳"自定义"或映射成 named:<整个URL> 无对应项
+                        : namedByCaseUrl(form.proxy)
+                          ? `named:${namedByCaseUrl(form.proxy)!.name}`
+                          : "custom"
+                }
                 onValueChange={(v) =>
                   patch({
-                    proxy: v === "system" ? null : v === "direct" ? "" : form.proxy || "http://",
+                    proxy:
+                      v === "system"
+                        ? null
+                        : v === "direct"
+                          ? ""
+                          // 自定义:清掉引用串给空模板,否则用户面对的是上一次的
+                          // proxy:<name>,且下拉值匹配 named 档无法进入编辑
+                          : v === "custom"
+                            ? "socks5://"
+                            : `proxy:${v.slice(6)}`,
                   })
                 }
               >
@@ -275,16 +516,31 @@ function ChannelDialog({
                 <SelectContent>
                   <SelectItem value="system">跟随系统</SelectItem>
                   <SelectItem value="direct">直连</SelectItem>
+                  {namedProxies.map((p) => (
+                    <SelectItem key={p.name} value={`named:${p.name}`}>
+                      {p.name}
+                    </SelectItem>
+                  ))}
                   <SelectItem value="custom">自定义</SelectItem>
                 </SelectContent>
               </Select>
-              {form.proxy !== null && form.proxy !== "" && (
-                <Input
-                  value={form.proxy}
-                  onChange={(e) => patch({ proxy: e.target.value })}
-                  placeholder="http://127.0.0.1:7890"
-                  className="font-mono"
-                />
+              {/* 自定义输入框:仅 custom 态显示。proxy:<name> 引用态显示说明文字,
+                  误编辑会把引用串覆写成裸字符串,数据面解析直接报错 */}
+              {form.proxy !== null &&
+                form.proxy !== "" &&
+                !namedByCaseUrl(form.proxy) &&
+                !form.proxy.startsWith("proxy:") && (
+                  <Input
+                    value={form.proxy}
+                    onChange={(e) => patch({ proxy: e.target.value })}
+                    placeholder="socks5://127.0.0.1:7890 或 http://…(可在设置-代理管理添加命名代理)"
+                    className="font-mono"
+                  />
+                )}
+              {form.proxy?.startsWith("proxy:") && (
+                <p className="text-xs text-muted-foreground">
+                  使用命名代理「{form.proxy.slice(6)}」,在 设置-代理管理 中维护地址
+                </p>
               )}
             </div>
             <div className="space-y-1.5">
@@ -442,6 +698,8 @@ export function ChannelsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Channel | null>(null);
   const [testing, setTesting] = useState<number | null>(null);
+  // 对话测试结果:渠道 id → 最近一次结果(列表行内展开显示)
+  const [testResult, setTestResult] = useState<Record<number, TestChannelResult>>({});
 
   const breakerOf = (id: number) =>
     breakers?.find((b) => b.channelId === id);
@@ -450,8 +708,10 @@ export function ChannelsPage() {
     mutationFn: (id: number) => api.testChannel(id),
     onMutate: (id) => setTesting(id),
     onSettled: () => setTesting(null),
-    onSuccess: (r) =>
-      r.ok ? toast.success(r.message) : toast.error(r.message),
+    onSuccess: (r, id) => {
+      setTestResult((m) => ({ ...m, [id]: r }));
+      if (r.ok) toast.success(r.message);
+    },
     onError: (e) => toast.error(String(e)),
   });
 
@@ -461,12 +721,7 @@ export function ChannelsPage() {
     <div className="space-y-4">
       <Card>
         <CardHeader className="flex-row items-center justify-between space-y-0 pb-4">
-          <div>
-            <CardTitle className="text-base">渠道管理</CardTitle>
-            <CardDescription>
-              上游渠道按密钥内配置的顺序做故障转移;熔断后自动跳过,冷却后半开探测
-            </CardDescription>
-          </div>
+          <CardTitle className="text-base">渠道管理</CardTitle>
           <Button
             size="sm"
             onClick={() => {
@@ -504,10 +759,27 @@ export function ChannelsPage() {
               </thead>
               <tbody>
                 {channels.map((ch) => (
-                  <tr key={ch.id} className="border-b last:border-0">
-                    <td className="py-2.5 pr-3 font-medium">{ch.name}</td>
+                  <Fragment key={ch.id}>
+                    <tr className="border-b last:border-0">
+                    <td className="py-2.5 pr-3 font-medium">
+                      <span className="inline-flex items-center gap-2">
+                        {ch.icon && (
+                          ch.icon.startsWith("data:image/") ? (
+                            <img src={ch.icon} alt="" className="h-5 w-5 object-contain" />
+                          ) : (
+                            <span className="text-base leading-none">{ch.icon}</span>
+                          )
+                        )}
+                        {ch.name}
+                      </span>
+                    </td>
                     <td className="py-2.5 pr-3">
                       <Badge variant="secondary">{ch.protocol}</Badge>
+                      {ch.priceCurrency === "usd" && (
+                        <Badge variant="secondary" className="px-1.5" title="该渠道按美元价格计费">
+                          $
+                        </Badge>
+                      )}
                     </td>
                     <td className="max-w-[220px] truncate py-2.5 pr-3 font-mono text-xs text-muted-foreground">
                       {ch.baseUrl}
@@ -613,6 +885,49 @@ export function ChannelsPage() {
                       </div>
                     </td>
                   </tr>
+                  {/* 对话测试结果:测试后展开在渠道行下方,显示回复内容与性能参数 */}
+                  {testResult[ch.id] && (
+                    <tr className="border-b last:border-0">
+                      <td colSpan={7} className="bg-muted/20 px-3 py-2.5">
+                        {(() => {
+                          const r = testResult[ch.id];
+                          return r.ok ? (
+                            <div className="space-y-1.5 text-xs">
+                              <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                                <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                                  ✓ 测试成功
+                                </span>
+                                <span className="text-muted-foreground">
+                                  首字 <span className="font-mono">{r.ttftMs}ms</span>
+                                </span>
+                                <span className="text-muted-foreground">
+                                  总耗时 <span className="font-mono">{r.latencyMs}ms</span>
+                                </span>
+                                {r.completionTokens != null && (
+                                  <span className="text-muted-foreground">
+                                    输出 <span className="font-mono">{r.completionTokens} tok</span>
+                                  </span>
+                                )}
+                                {r.model && (
+                                  <span className="font-mono text-muted-foreground">
+                                    {r.model}
+                                  </span>
+                                )}
+                              </div>
+                              {r.reply && (
+                                <div className="whitespace-pre-wrap rounded-md border bg-background px-2.5 py-1.5 font-mono leading-5">
+                                  {r.reply}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-xs text-destructive">✗ {r.message}</span>
+                          );
+                        })()}
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>

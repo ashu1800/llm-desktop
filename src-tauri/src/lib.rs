@@ -138,6 +138,8 @@ pub fn run() {
             commands::config::import_config_preview,
             commands::config::import_config_apply,
             commands::icons::pick_client_icon,
+            commands::proxy_mgmt::test_proxy_latency,
+            commands::proxy_mgmt::get_updater_proxy,
             commands::breaker::get_breaker_states,
             commands::breaker::recover_channel,
         ])
@@ -148,6 +150,8 @@ pub fn run() {
 async fn init_state(handle: &tauri::AppHandle) -> Result<AppState, Box<dyn std::error::Error>> {
     let data_dir = handle.path().app_data_dir()?;
     std::fs::create_dir_all(&data_dir)?;
+    // 节假日缓存与数据库同目录
+    crate::billing::holiday::set_data_dir(data_dir.clone());
     let db = store::init_pool(&data_dir.join("gateway.db")).await?;
     let settings = store::settings::load(&db).await?;
 

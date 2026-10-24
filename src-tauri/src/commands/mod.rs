@@ -5,5 +5,6 @@ pub mod icons;
 pub mod keys;
 pub mod logs;
 pub mod prices;
+pub mod proxy_mgmt;
 pub mod service;
 pub mod settings;

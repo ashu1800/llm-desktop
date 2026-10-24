@@ -620,14 +620,16 @@ pub fn render_finish(sr: StopReason) -> &'static str {
 }
 
 pub fn parse_usage(u: &Value) -> Usage {
+    // 负值钳 0:与 anthropic/gemini 同口径,防异常上游回负 token 污染计费
+    let clamp = |v: Option<i64>| v.unwrap_or(0).max(0);
     Usage {
-        prompt: u.get("prompt_tokens").and_then(Value::as_i64).unwrap_or(0),
-        completion: u.get("completion_tokens").and_then(Value::as_i64).unwrap_or(0),
-        cache_read: u
-            .get("prompt_tokens_details")
-            .and_then(|d| d.get("cached_tokens"))
-            .and_then(Value::as_i64)
-            .unwrap_or(0),
+        prompt: clamp(u.get("prompt_tokens").and_then(Value::as_i64)),
+        completion: clamp(u.get("completion_tokens").and_then(Value::as_i64)),
+        cache_read: clamp(
+            u.get("prompt_tokens_details")
+                .and_then(|d| d.get("cached_tokens"))
+                .and_then(Value::as_i64),
+        ),
         cache_write: 0,
     }
 }

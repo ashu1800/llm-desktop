@@ -482,18 +482,15 @@ pub enum UpstreamBody {
 /// Gemini promptTokenCount 均如此),计费公式按总量扣缓存。若不归一化,
 /// 非缓存输入会被公式二次扣减而免计,费用系统性偏低。
 pub fn parse_usage(u: &Value) -> Usage {
-    let input = u.get("input_tokens").and_then(Value::as_i64).unwrap_or(0);
-    let cache_read = u
-        .get("cache_read_input_tokens")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
-    let cache_write = u
-        .get("cache_creation_input_tokens")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
+    // 负值钳 0:异常/恶意上游回负 token 会让 i64 相加回绕、计费出负费用,
+    // 且与回填口径(backfill .max(0))保持一致
+    let clamp = |v: Option<i64>| v.unwrap_or(0).max(0);
+    let input = clamp(u.get("input_tokens").and_then(Value::as_i64));
+    let cache_read = clamp(u.get("cache_read_input_tokens").and_then(Value::as_i64));
+    let cache_write = clamp(u.get("cache_creation_input_tokens").and_then(Value::as_i64));
     Usage {
         prompt: input + cache_read + cache_write,
-        completion: u.get("output_tokens").and_then(Value::as_i64).unwrap_or(0),
+        completion: clamp(u.get("output_tokens").and_then(Value::as_i64)),
         cache_read,
         cache_write,
     }

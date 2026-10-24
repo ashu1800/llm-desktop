@@ -33,6 +33,9 @@ pub struct RequestLog {
     /// 计费币种:"cny"(默认,历史行)|"usd";cost 单位相应为 微元/微美元
     #[serde(default)]
     pub currency: String,
+    /// 命中的计费倍率(None = 未启用倍率/1.0)
+    #[serde(default)]
+    pub rate: Option<f64>,
     pub client: Option<String>,
     pub req_snapshot: Option<String>,
     pub resp_snapshot: Option<String>,
@@ -89,8 +92,8 @@ async fn insert_batch(pool: &SqlitePool, logs: &[RequestLog]) -> Result<(), Stri
             "INSERT INTO request_logs (ts, key_id, key_name, channel_id, channel_name, model,
                  mapped_model, tag, protocol_in, protocol_up, status, is_stream, attempts, error,
                  prompt_tokens, completion_tokens, cache_read, cache_write, estimated, ttft_ms,
-                 total_ms, speed, cost, currency, client, req_snapshot, resp_snapshot)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                 total_ms, speed, cost, currency, rate, client, req_snapshot, resp_snapshot)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(l.ts)
         .bind(l.key_id)
@@ -116,6 +119,7 @@ async fn insert_batch(pool: &SqlitePool, logs: &[RequestLog]) -> Result<(), Stri
         .bind(l.speed)
         .bind(l.cost)
         .bind(&l.currency)
+        .bind(l.rate)
         .bind(&l.client)
         .bind(&l.req_snapshot)
         .bind(&l.resp_snapshot)
@@ -150,8 +154,8 @@ pub async fn clear_all(pool: &SqlitePool) -> Result<(), String> {
 
 /// 对 cost 为空的历史日志按当前定价表回填费用,返回回填条数。
 /// 探测顺序与实时计费一致:入口模型名优先,无匹配回退映射名。
-/// 待回填行:(id, 入口模型, 映射模型, prompt, completion, cache_read, cache_write)
-type BackfillRow = (i64, String, Option<String>, i64, i64, i64, i64);
+/// 待回填行:(id, 入口模型, 映射模型, 渠道id, prompt, completion, cache_read, cache_write)
+type BackfillRow = (i64, String, Option<String>, Option<i64>, i64, i64, i64, i64);
 
 /// 单事务批量行数:逐行 autocommit 每条一次 fsync,大回填极慢
 const BACKFILL_BATCH: usize = 500;
@@ -161,19 +165,29 @@ pub async fn backfill_costs(
     prices: &crate::billing::pricing::PriceTable,
 ) -> Result<u64, String> {
     let rows: Vec<BackfillRow> = sqlx::query_as(
-        "SELECT id, model, mapped_model, prompt_tokens, completion_tokens, cache_read, cache_write
+        "SELECT id, model, mapped_model, channel_id, prompt_tokens, completion_tokens,
+                cache_read, cache_write
          FROM request_logs WHERE cost IS NULL",
     )
     .fetch_all(pool)
     .await
     .map_err(|e| format!("读取待回填日志失败: {e}"))?;
+    // 渠道计费币种映射:回填口径与实时计费一致(渠道选 usd 按美元价,未配回退人民币)
+    let channel_currency: std::collections::HashMap<i64, crate::billing::Currency> =
+        sqlx::query_as("SELECT id, price_currency FROM channels")
+            .fetch_all(pool)
+            .await
+            .map_err(|e| format!("读取渠道币种失败: {e}"))?
+            .into_iter()
+            .map(|(id, cur): (i64, String)| (id, crate::billing::Currency::parse(&cur)))
+            .collect();
     let mut updated = 0u64;
     for chunk in rows.chunks(BACKFILL_BATCH) {
         let mut tx = pool
             .begin()
             .await
             .map_err(|e| format!("开启回填事务失败: {e}"))?;
-        for (id, model, mapped, prompt, completion, cache_read, cache_write) in chunk {
+        for (id, model, mapped, channel_id, prompt, completion, cache_read, cache_write) in chunk {
             let (id, model, mapped) = (*id, model.clone(), mapped.clone());
             let (prompt, completion, cache_read, cache_write) =
                 (*prompt, *completion, *cache_read, *cache_write);
@@ -189,14 +203,18 @@ pub async fn backfill_costs(
                 cache_read: cache_read.max(0),
                 cache_write: cache_write.max(0),
             };
-            let cost = crate::billing::compute_cost(p, &usage);
-            // 回填同时写入币种:定价条目可能已改为美元,统计按行内 currency 分列
-            let currency = crate::billing::currency_of(p);
+            let currency = channel_id
+                .and_then(|cid| channel_currency.get(&cid).copied())
+                .unwrap_or(crate::billing::Currency::Cny);
+            let (price_group, actual_currency) =
+                crate::billing::resolve_pricing(p, currency);
+            let cost = crate::billing::compute_cost(price_group, &usage);
+            // 回填同时写入币种:统计按行内 currency 分列
             let r = sqlx::query(
                 "UPDATE request_logs SET cost=?, currency=? WHERE id=? AND cost IS NULL",
             )
             .bind(cost)
-            .bind(currency.as_str())
+            .bind(actual_currency.as_str())
             .bind(id)
             .execute(&mut *tx)
             .await
@@ -264,12 +282,15 @@ pub struct LogItem {
     /// 计费币种:"cny"(默认,历史行)|"usd";cost 单位相应为 微元/微美元
     #[serde(default)]
     pub currency: String,
+    /// 命中的计费倍率(None = 未启用倍率规则/倍率 1);仅展示用
+    #[serde(default)]
+    pub rate: Option<f64>,
     pub client: Option<String>,
 }
 
 const LIST_COLS: &str = "id, ts, key_id, key_name, channel_id, channel_name, model, mapped_model, \
      tag, protocol_in, protocol_up, status, is_stream, attempts, error, prompt_tokens, \
-     completion_tokens, cache_read, cache_write, estimated, ttft_ms, total_ms, speed, cost, currency, client";
+     completion_tokens, cache_read, cache_write, estimated, ttft_ms, total_ms, speed, cost, currency, rate, client";
 
 fn push_filters<'a>(qb: &mut QueryBuilder<'a, Sqlite>, f: &'a LogFilter) {
     qb.push(" WHERE 1=1");
@@ -460,7 +481,10 @@ mod tests {
             output,
             cache_read: 0.0,
             cache_write: 0.0,
-            usd: false,
+            input_usd: None,
+            output_usd: None,
+            cache_read_usd: None,
+            cache_write_usd: None,
         }
     }
 

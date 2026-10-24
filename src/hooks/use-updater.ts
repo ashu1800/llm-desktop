@@ -1,9 +1,16 @@
-// 自动更新:tauri-plugin-updater(GitHub Releases latest.json)+ minisign 签名校验
+// 自动更新:tauri-plugin-updater(GitHub Releases latest.json)+ minisign 签名校验。
+// 代理:check()/downloadAndInstall() 均经 builder 注入 proxy 选项,
+// 代理 url 由设置 updaterProxy 名解析(get_updater_proxy),空 = 直连
 import { useCallback, useEffect, useSyncExternalStore } from "react";
-import { check, type Update, type DownloadEvent } from "@tauri-apps/plugin-updater";
+import {
+  check,
+  type Update,
+  type DownloadEvent,
+} from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
+import { api } from "@/lib/api";
 
 export type UpdatePhase =
   | "idle" // 未检查
@@ -35,6 +42,12 @@ const AUTO_RECHECK_INTERVAL_MS = 60 * 1000;
 type CheckOutcome = { update: Update | null } | { error: string };
 let inFlightCheck: Promise<CheckOutcome> | null = null;
 
+/** 解析更新代理 url:每次检查前实时调用(本地 IPC 开销可忽略)。
+ *  不做模块级缓存——改设置后立即生效;失败按直连处理(不缓存失败结果) */
+async function resolveProxyUrl(): Promise<string | null | undefined> {
+  return api.getUpdaterProxy().catch(() => null);
+}
+
 // ---------- 模块级单例状态 ----------
 // App 与 SettingsPage 各挂一个 useUpdater;若各自持有 state,一边下载中另一边
 // 仍显示"立即更新",可并发 downloadAndInstall(二次拉起安装器)、重复 toast。
@@ -62,7 +75,10 @@ function doCheck(): Promise<CheckOutcome> {
   if (!inFlightCheck) {
     inFlightCheck = (async () => {
       try {
-        const update = await check();
+        // check 与后续 downloadAndInstall 用同一代理:check 返回的 Update
+        // 内部持有 builder 配置,downloadAndInstall 自动沿用
+        const proxy = await resolveProxyUrl();
+        const update = await check(proxy ? { proxy } : undefined);
         return { update };
       } catch (e) {
         return { error: String(e) };

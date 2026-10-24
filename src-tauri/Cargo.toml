@@ -1,6 +1,6 @@
 [package]
 name = "llm-desktop"
-version = "0.1.8"
+version = "0.1.9"
 description = "本地 LLM API 网关"
 edition = "2021"
 
@@ -23,6 +23,8 @@ log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
+# 倍率规则的日类型/时段判定(本地时区)
+chrono = "0.4"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net"] }
 axum = "0.8"
 tower = "0.5"

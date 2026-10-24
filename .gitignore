@@ -10,3 +10,6 @@ src-tauri/gen/schemas/
 # 签名私钥绝不入库(存 ~/.tauri/ 与 GitHub Secrets)
 *.key
 *.key.pub
+
+# dev 独立标识配置(避免与正式版单实例互顶)
+src-tauri/tauri.dev.conf.json

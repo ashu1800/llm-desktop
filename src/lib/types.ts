@@ -18,6 +18,12 @@ export interface TimeoutDefaults {
 
 export type ThemeMode = "system" | "light" | "dark";
 
+/** 命名代理条目:渠道按 url 引用,更新器按名字引用 */
+export interface ProxyEntry {
+  name: string;
+  url: string;
+}
+
 export interface AppSettings {
   port: number;
   listenAddr: string;
@@ -32,6 +38,10 @@ export interface AppSettings {
   clientAliases: Record<string, string>;
   /** 客户端图标映射:键 = 原名,值 = emoji */
   clientIcons: Record<string, string>;
+  /** 命名代理池 */
+  proxies: ProxyEntry[];
+  /** GitHub 更新检查/下载使用的代理名;空 = 直连 */
+  updaterProxy: string;
   breaker: BreakerDefaults;
   timeouts: TimeoutDefaults;
 }
@@ -39,6 +49,20 @@ export interface AppSettings {
 export interface ServiceStatus {
   running: boolean;
   addr: string | null;
+}
+
+/** 渠道对话测试结果 */
+export interface TestChannelResult {
+  ok: boolean;
+  latencyMs: number;
+  message: string;
+  /** 首字延迟(响应头到达) */
+  ttftMs: number | null;
+  /** 模型返回文本 */
+  reply: string | null;
+  /** 实际使用的模型名 */
+  model: string | null;
+  completionTokens: number | null;
 }
 
 export type GatewayEvent =
@@ -65,6 +89,19 @@ export interface TimeoutOverride {
   nonStreamTotalSecs?: number | null;
 }
 
+/** 渠道模型计费倍率规则:命中请求 cost × rate(默认 1) */
+export interface RateRule {
+  /** 模型名或 prefix* 通配;空串 = 全部模型 */
+  model: string;
+  /** 倍率(0~100);1 = 不变 */
+  rate: number;
+  /** all=不限 | workday=工作日 | weekend=周末 | holiday=法定节假日 */
+  dayType: string;
+  /** 生效时段 "HH:MM-HH:MM"(本地时区,支持跨午夜);空 = 全天 */
+  timeRange: string;
+  remark: string;
+}
+
 export interface BreakerOverride {
   windowSecs?: number | null;
   consecutiveFailures?: number | null;
@@ -88,6 +125,12 @@ export interface Channel {
   timeoutOverride: TimeoutOverride | null;
   breakerOverride: BreakerOverride | null;
   remark: string;
+  /** 渠道图标:emoji 或图片 dataURL;空 = 不显示 */
+  icon: string;
+  /** 计费币种:"cny"(默认)|"usd";按此取定价表对应价格组 */
+  priceCurrency: string;
+  /** 模型计费倍率规则;空 = 全部按 1.0 */
+  rateRules: RateRule[];
   createdAt: number;
   updatedAt: number;
 }
@@ -103,12 +146,6 @@ export interface ApiKey {
   lastUsedAt: number | null;
 }
 
-export interface TestChannelResult {
-  ok: boolean;
-  latencyMs: number;
-  message: string;
-}
-
 export interface BreakerStatus {
   channelId: number;
   state: "closed" | "open" | "half_open";
@@ -117,12 +154,16 @@ export interface BreakerStatus {
 
 export interface PriceEntry {
   pattern: string;
+  /** 人民币价格(元/百万 token) */
   input: number;
   output: number;
   cacheRead: number;
   cacheWrite: number;
-  /** true = 四个价格字段按 美元/百万 token 解释 */
-  usd: boolean;
+  /** 美元价格($/百万 token),null = 未配;部分配置合法,未配侧按 0 计 */
+  inputUsd: number | null;
+  outputUsd: number | null;
+  cacheReadUsd: number | null;
+  cacheWriteUsd: number | null;
 }
 
 export interface UnpricedModel {
@@ -173,6 +214,8 @@ export interface LogItem {
   cost: number | null;
   /** 计费币种:"cny"(默认)|"usd" */
   currency: string;
+  /** 命中的计费倍率(null = 未启用/1.0) */
+  rate: number | null;
   client: string | null;
 }
 
