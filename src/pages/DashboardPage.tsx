@@ -10,8 +10,6 @@ import {
   Database,
   Link2,
   Loader2,
-  Pause,
-  Play,
   RefreshCw,
   ScrollText,
 } from "lucide-react";
@@ -21,6 +19,7 @@ import {
   useBreakerStates,
   useChannels,
   useLogs,
+  useLogModels,
   useStats,
   useUnpricedModels,
 } from "@/hooks/use-gateway";
@@ -30,6 +29,7 @@ import {
   fmtK,
   fmtMs,
   fmtTime,
+  fmtUsd,
   fmtYuan,
   latencyColor,
   matchPrice,
@@ -181,6 +181,10 @@ function LogDetailDialog({
       ? matchPrice(prices, detail.model) ??
         (detail.mappedModel ? matchPrice(prices, detail.mappedModel) : undefined)
       : undefined;
+  // 行内币种决定单位与符号:美元定价条目按微美元展示,不与人民币换算
+  const isUsd = detail?.currency === "usd";
+  const unit = isUsd ? "$/M" : "元/M";
+  const fmtCost = isUsd ? fmtUsd : fmtYuan;
 
   return (
     <Dialog open={id != null} onOpenChange={(o) => !o && onClose()}>
@@ -237,21 +241,21 @@ function LogDetailDialog({
                         detail.promptTokens - detail.cacheRead - detail.cacheWrite,
                       ),
                     )}{" "}
-                    × {price.input} 元/M
+                    × {price.input} {unit}
                   </div>
                   <div>
-                    缓存读 {fmtK(detail.cacheRead)} × {price.cacheRead} 元/M + 缓存写{" "}
-                    {fmtK(detail.cacheWrite)} × {price.cacheWrite} 元/M
+                    缓存读 {fmtK(detail.cacheRead)} × {price.cacheRead} {unit} + 缓存写{" "}
+                    {fmtK(detail.cacheWrite)} × {price.cacheWrite} {unit}
                   </div>
                   <div>
-                    输出 {fmtK(detail.completionTokens)} × {price.output} 元/M
+                    输出 {fmtK(detail.completionTokens)} × {price.output} {unit}
                   </div>
                   <div className="font-semibold">
-                    = {fmtYuan(detail.cost)}(命中定价 {price.pattern})
+                    = {fmtCost(detail.cost)}(命中定价 {price.pattern})
                   </div>
                 </div>
               ) : detail.cost != null ? (
-                <p className="text-sm">{fmtYuan(detail.cost)}(定价条目已删除)</p>
+                <p className="text-sm">{fmtCost(detail.cost)}(定价条目已删除)</p>
               ) : (
                 <p className="text-sm text-muted-foreground">
                   未计费:定价表无该模型(可在"模型定价"页补录并回填)
@@ -329,10 +333,10 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
   const clientDisplay = clientAlias ?? l.client;
   return (
     <tr className="border-b text-center last:border-0 hover:bg-accent/30">
-      <td className="py-1.5 pr-3 font-mono text-xs" title={fmtFullTime(l.ts)}>
+      <td className="py-1.5 pr-2 font-mono text-xs" title={fmtFullTime(l.ts)}>
         {fmtTime(l.ts)}
       </td>
-      <td className="py-1.5 pr-3">
+      <td className="py-1.5 pr-2">
         <div className="inline-flex items-center gap-1.5">
           <Badge variant="secondary" className="max-w-[180px] truncate px-1.5 font-mono">
             {l.model}
@@ -340,7 +344,7 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
           {l.tag && <Badge variant="outline" className="px-1.5">{l.tag}</Badge>}
         </div>
       </td>
-      <td className="py-1.5 pr-3 text-sm">
+      <td className="py-1.5 pr-2 text-sm">
         <span className="inline-flex items-center gap-1">
           <span className="h-1.5 w-1.5 rounded-full bg-primary/60" />
           {l.channelName ?? "—"}
@@ -351,7 +355,7 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
           )}
         </span>
       </td>
-      <td className="py-1.5 pr-3 font-mono text-xs leading-5">
+      <td className="py-1.5 pr-2 font-mono text-xs leading-5">
         <div className="flex items-center justify-center gap-2.5">
           <span
             className="text-orange-500"
@@ -375,7 +379,7 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
         </div>
       </td>
       {/* 任务耗时:单元格保持左对齐;首字/生成耗时按快慢分档着色;非流式整块淡色 */}
-      <td className={cn("py-1.5 pr-3 text-left font-mono text-xs leading-4", !l.isStream && "text-muted-foreground")}>
+      <td className={cn("py-1.5 pr-2 text-left font-mono text-xs leading-4", !l.isStream && "text-muted-foreground")}>
         <div>
           <div className="flex items-center gap-1.5">
             <span className="h-3 w-0.5 shrink-0 rounded-full bg-zinc-400" />
@@ -408,19 +412,19 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
           </div>
         </div>
       </td>
-      <td className="py-1.5 pr-3 font-mono text-xs">
+      <td className="py-1.5 pr-2 font-mono text-xs">
         {l.cost != null && (
           <span title={l.estimated ? "usage 为本地估算" : undefined}>
             {l.estimated ? "~" : ""}
-            {fmtYuan(l.cost)}
+            {l.currency === "usd" ? fmtUsd(l.cost) : fmtYuan(l.cost)}
           </span>
         )}
         {l.cost == null && <span className="text-muted-foreground">—</span>}
       </td>
-      <td className="py-1.5 pr-3">
+      <td className="py-1.5 pr-2">
         <StatusCell status={l.status} />
       </td>
-      <td className="py-1.5 pr-3">
+      <td className="py-1.5 pr-2">
         {l.keyName ? (
           <Badge variant="outline" className="px-1.5">
             {l.keyName}
@@ -430,12 +434,16 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
         )}
       </td>
       <td
-        className="max-w-[110px] truncate py-1.5 pr-3 text-xs text-muted-foreground"
+        className="max-w-[110px] truncate py-1.5 pr-2 text-xs text-muted-foreground"
         title={l.client ?? undefined}
       >
         {clientDisplay ? (
           <span className="inline-flex items-center gap-1">
-            {clientIcon && <span className="text-sm leading-none">{clientIcon}</span>}
+            {clientIcon && clientIcon.startsWith("data:image/") ? (
+              <img src={clientIcon} alt="" className="h-4 w-4 object-contain" />
+            ) : (
+              clientIcon && <span className="text-sm leading-none">{clientIcon}</span>
+            )}
             <span className="truncate">{clientDisplay}</span>
           </span>
         ) : (
@@ -457,15 +465,14 @@ export function DashboardPage() {
   const { data: unpriced } = useUnpricedModels();
   const { data: channels } = useChannels();
   const { data: keys } = useApiKeys();
+  const { data: logModels } = useLogModels();
   const qc = useQueryClient();
   const [range, setRange] = useState<TimeRange>("today");
   const [channelFilter, setChannelFilter] = useState("all");
   const [keyFilter, setKeyFilter] = useState("all");
-  const [statusClass, setStatusClass] = useState("all");
+  // 模型筛选(精确匹配),all = 全部模型
+  const [modelFilter, setModelFilter] = useState("all");
   const [page, setPage] = useState(0);
-  // 实时同步开关入全局 store:useGatewayEvents(挂载在 App)据此决定是否响应落库事件
-  const live = useAppStore((s) => s.logsLive);
-  const setLive = useAppStore((s) => s.setLogsLive);
   const [detailId, setDetailId] = useState<number | null>(null);
 
   const filter = useMemo<LogFilter>(
@@ -473,12 +480,11 @@ export function DashboardPage() {
       fromTs: rangeFromTs(range),
       channelId: channelFilter === "all" ? null : Number(channelFilter),
       keyId: keyFilter === "all" ? null : Number(keyFilter),
-      statusClass:
-        statusClass === "all" ? null : (statusClass as "success" | "error"),
+      model: modelFilter === "all" ? undefined : modelFilter,
       offset: page * PAGE_SIZE,
       limit: PAGE_SIZE,
     }),
-    [range, channelFilter, keyFilter, statusClass, page],
+    [range, channelFilter, keyFilter, modelFilter, page],
   );
 
   const { data: stats } = useStats(filter);
@@ -594,19 +600,22 @@ export function DashboardPage() {
           </SelectContent>
         </Select>
         <Select
-          value={statusClass}
+          value={modelFilter}
           onValueChange={(v) => {
-            setStatusClass(v);
+            setModelFilter(v);
             resetPage();
           }}
         >
-          <SelectTrigger className="h-8 w-[100px] text-xs">
+          <SelectTrigger className="h-8 w-[150px] text-xs">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">全部状态</SelectItem>
-            <SelectItem value="success">成功</SelectItem>
-            <SelectItem value="error">失败</SelectItem>
+            <SelectItem value="all">全部模型</SelectItem>
+            {(logModels ?? []).map((m) => (
+              <SelectItem key={m} value={m}>
+                {m}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
       </div>
@@ -627,7 +636,12 @@ export function DashboardPage() {
           valueClass="text-[#A87E0B] dark:text-[#E0B33C]"
           label="消耗金额"
           value={stats ? fmtYuan(stats.totalCost) : "—"}
-          hint="按定价表计,含缓存"
+          // 有美元定价消耗时在副行分列展示;两种币种互不换算
+          hint={
+            stats && stats.totalCostUsd > 0
+              ? `美元消耗 ${fmtUsd(stats.totalCostUsd)} · 按定价表计`
+              : "按定价表计,含缓存"
+          }
         />
         <StatCard
           icon={ScrollText}
@@ -652,17 +666,9 @@ export function DashboardPage() {
         <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
           <div>
             <CardTitle className="text-base">请求日志</CardTitle>
-            <CardDescription>共 {total} 条 · 实时同步</CardDescription>
+            <CardDescription>共 {total} 条</CardDescription>
           </div>
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Button
-              variant="ghost"
-              size="icon"
-              title={live ? "暂停实时同步" : "开启实时同步"}
-              onClick={() => setLive(!live)}
-            >
-              {live ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-            </Button>
             <Button
               variant="ghost"
               size="icon"
@@ -708,15 +714,15 @@ export function DashboardPage() {
               <thead className="sticky top-0 z-10 bg-card">
                 {/* 任务耗时列特殊:内容与表头均左对齐(竖条锚点行),其余列居中 */}
                 <tr className="border-b text-center text-xs text-muted-foreground">
-                  <th className="py-2 pr-3 font-medium">时间</th>
-                  <th className="py-2 pr-3 font-medium">模型</th>
-                  <th className="py-2 pr-3 font-medium">渠道</th>
-                  <th className="py-2 pr-3 font-medium">词元</th>
-                  <th className="py-2 pr-3 text-left font-medium">任务耗时</th>
-                  <th className="py-2 pr-3 font-medium">费用</th>
-                  <th className="py-2 pr-3 font-medium">状态</th>
-                  <th className="py-2 pr-3 font-medium">密钥</th>
-                  <th className="py-2 pr-3 font-medium">客户端</th>
+                  <th className="py-2 pr-2 font-medium">时间</th>
+                  <th className="py-2 pr-2 font-medium">模型</th>
+                  <th className="py-2 pr-2 font-medium">渠道</th>
+                  <th className="py-2 pr-2 font-medium">词元</th>
+                  <th className="py-2 pr-2 text-left font-medium">任务耗时</th>
+                  <th className="py-2 pr-2 font-medium">费用</th>
+                  <th className="py-2 pr-2 font-medium">状态</th>
+                  <th className="py-2 pr-2 font-medium">密钥</th>
+                  <th className="py-2 pr-2 font-medium">客户端</th>
                   <th className="py-2 font-medium">操作</th>
                 </tr>
               </thead>

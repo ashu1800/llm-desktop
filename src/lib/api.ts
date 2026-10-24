@@ -65,6 +65,9 @@ export const api = {
   getStats: (filter: LogFilter) => invoke<StatsSummary>("get_stats", { filter }),
   clearLogs: () => invoke<void>("clear_logs"),
   listClients: () => invoke<string[]>("list_clients"),
+  listLogModels: () => invoke<string[]>("list_models"),
+  /** 弹图片选择框,规范化为 64px PNG dataURL;取消返回 null */
+  pickClientIcon: () => invoke<string | null>("pick_client_icon"),
 
   // 配置导入导出
   exportConfig: () => invoke<string | null>("export_config"),

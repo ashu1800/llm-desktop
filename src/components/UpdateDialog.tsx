@@ -53,12 +53,12 @@ function parseBody(body: string): ChangelogSection[] {
   return sections;
 }
 
-/** x.y.z 降序比较(仅数字段;不等长按 0 补齐) */
-function cmpVerDesc(a: string, b: string): number {
+/** x.y.z 升序比较:返回 <0 表示 a 更旧,>0 表示 a 更新,0 为相等(仅数字段) */
+function cmpVer(a: string, b: string): number {
   const pa = a.replace(/^v/, "").split(/[.-]/).map((x) => parseInt(x, 10) || 0);
   const pb = b.replace(/^v/, "").split(/[.-]/).map((x) => parseInt(x, 10) || 0);
   for (let i = 0; i < 3; i++) {
-    const d = (pb[i] ?? 0) - (pa[i] ?? 0);
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
     if (d !== 0) return d;
   }
   return 0;
@@ -76,10 +76,9 @@ async function fetchChangelog(current: string): Promise<ChangelogEntry[]> {
     body?: string;
   }>;
   return list
-    .filter(
-      (r) => !r.draft && !r.prerelease && cmpVerDesc(r.tag_name, current) > 0,
-    )
-    .sort((a, b) => cmpVerDesc(a.tag_name, b.tag_name))
+    // 只展示比当前版本新的更新日志;按新→旧排序
+    .filter((r) => !r.draft && !r.prerelease && cmpVer(r.tag_name, current) > 0)
+    .sort((a, b) => cmpVer(b.tag_name, a.tag_name))
     .map((r) => {
       const raw = r.body ?? "";
       return {

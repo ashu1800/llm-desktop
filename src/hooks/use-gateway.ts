@@ -24,6 +24,11 @@ export function useUnpricedModels() {
   return useQuery({ queryKey: ["unpriced"], queryFn: api.listUnpricedModels });
 }
 
+/** 历史日志中出现过的模型名(去重):日志筛选下拉选项 */
+export function useLogModels() {
+  return useQuery({ queryKey: ["log-models"], queryFn: api.listLogModels });
+}
+
 export function useBreakerStates() {
   // 事件推送为主,5s 轮询兜底(剩余冷却秒数递减也需要刷新)
   return useQuery({

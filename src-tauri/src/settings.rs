@@ -129,7 +129,9 @@ impl AppSettings {
         self.timeouts.ttft_secs = self.timeouts.ttft_secs.clamp(5, 3600);
         self.timeouts.stream_idle_secs = self.timeouts.stream_idle_secs.clamp(5, 3600);
         self.timeouts.non_stream_total_secs = self.timeouts.non_stream_total_secs.clamp(5, 7200);
-        // 客户端映射清理:空显示名视为删除该条目;键值超长截断防滥用
+        // 客户端映射清理:空显示名视为删除该条目;键值超长截断防滥用。
+        // 图标值两种形态:emoji(≤8 字符)或图片 dataURL(规范命令固定输出 64px PNG,
+        // 数 KB;上限 16KB 拦截异常膨胀,超限视为无效删除)
         let cut = |s: &str, max: usize| -> String { s.chars().take(max).collect() };
         self.client_aliases = self
             .client_aliases
@@ -140,8 +142,20 @@ impl AppSettings {
         self.client_icons = self
             .client_icons
             .iter()
-            .filter(|(_, v)| !v.trim().is_empty())
-            .map(|(k, v)| (cut(k, 40), cut(v.trim(), 8)))
+            .filter(|(_, v)| {
+                let v = v.trim();
+                !v.is_empty() && (v.starts_with("data:image/") || v.chars().count() <= 8)
+            })
+            .map(|(k, v)| {
+                let v = v.trim();
+                let v = if v.starts_with("data:image/") {
+                    if v.len() <= 16 * 1024 { v } else { "" }
+                } else {
+                    &v[..v.chars().take(8).map(|c| c.len_utf8()).sum()]
+                };
+                (cut(k, 40), v.to_string())
+            })
+            .filter(|(_, v)| !v.is_empty())
             .collect();
         self
     }
