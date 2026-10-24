@@ -44,7 +44,6 @@ export type GatewayEvent =
 
 export type PageKey =
   | "dashboard"
-  | "logs"
   | "channels"
   | "keys"
   | "pricing"
@@ -183,10 +182,6 @@ export interface StatsSummary {
   completionTokens: number;
   cacheRead: number;
 }
-
-/** 后端元组序列化为 JSON 数组 */
-export type TrendPoint = [ts: number, count: number, costFen: number];
-export type NameCount = [name: string, count: number];
 
 /** 导入配置预览(二次确认用) */
 export interface ImportPreview {

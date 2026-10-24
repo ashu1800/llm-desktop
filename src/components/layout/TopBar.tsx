@@ -10,7 +10,6 @@ import type { PageKey } from "@/lib/types";
 
 const PAGE_TITLES: Record<PageKey, string> = {
   dashboard: "数据总览",
-  logs: "请求日志",
   channels: "渠道管理",
   keys: "密钥管理",
   pricing: "模型定价",

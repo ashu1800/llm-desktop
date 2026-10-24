@@ -11,9 +11,7 @@ import type {
   LogDetail,
   LogFilter,
   LogItem,
-  NameCount,
   StatsSummary,
-  TrendPoint,
   ImportPreview,
 } from "./types";
 
@@ -65,12 +63,6 @@ export const api = {
   getRequestLog: (id: number) =>
     invoke<LogDetail | null>("get_request_log", { id }),
   getStats: (filter: LogFilter) => invoke<StatsSummary>("get_stats", { filter }),
-  getTrend: (filter: LogFilter, bucket: "hour" | "day") =>
-    invoke<TrendPoint[]>("get_trend", { filter, bucket }),
-  getChannelStats: (filter: LogFilter) =>
-    invoke<NameCount[]>("get_channel_stats", { filter }),
-  getModelStats: (filter: LogFilter) =>
-    invoke<NameCount[]>("get_model_stats", { filter }),
   clearLogs: () => invoke<void>("clear_logs"),
 
   // 配置导入导出

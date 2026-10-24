@@ -372,64 +372,6 @@ pub async fn stats_summary(pool: &SqlitePool, f: &LogFilter) -> Result<StatsSumm
     })
 }
 
-/// 调用量与费用趋势:bucket_ms 为 3600000(小时)或 86400000(日)。
-/// 占位符按 SQL 文本顺序绑定:桶宽两个 ? 在 WHERE 条件之前。
-pub async fn stats_trend(
-    pool: &SqlitePool,
-    f: &LogFilter,
-    bucket_ms: i64,
-) -> Result<Vec<(i64, i64, i64)>, String> {
-    let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new("SELECT (ts / ");
-    qb.push_bind(bucket_ms);
-    qb.push(") * ");
-    qb.push_bind(bucket_ms);
-    qb.push(" AS b, COUNT(*), COALESCE(SUM(cost),0) FROM request_logs");
-    push_filters(&mut qb, f);
-    qb.push(" GROUP BY 1 ORDER BY 1");
-    let rows: Vec<(i64, i64, i64)> = qb
-        .build_query_as()
-        .fetch_all(pool)
-        .await
-        .map_err(|e| format!("统计趋势失败: {e}"))?;
-    Ok(rows)
-}
-
-/// 渠道请求占比:(渠道名, 请求数)
-pub async fn stats_by_channel(
-    pool: &SqlitePool,
-    f: &LogFilter,
-) -> Result<Vec<(String, i64)>, String> {
-    let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
-        "SELECT COALESCE(channel_name, '(无渠道)'), COUNT(*) FROM request_logs",
-    );
-    push_filters(&mut qb, f);
-    qb.push(" GROUP BY channel_name ORDER BY 2 DESC");
-    let rows: Vec<(String, i64)> = qb
-        .build_query_as()
-        .fetch_all(pool)
-        .await
-        .map_err(|e| format!("统计渠道占比失败: {e}"))?;
-    Ok(rows)
-}
-
-/// 模型 Top N:(模型名, 请求数)
-pub async fn stats_top_models(
-    pool: &SqlitePool,
-    f: &LogFilter,
-    limit: i64,
-) -> Result<Vec<(String, i64)>, String> {
-    let mut qb: QueryBuilder<Sqlite> =
-        QueryBuilder::new("SELECT model, COUNT(*) FROM request_logs");
-    push_filters(&mut qb, f);
-    qb.push(" GROUP BY model ORDER BY 2 DESC LIMIT ").push_bind(limit.clamp(1, 50));
-    let rows: Vec<(String, i64)> = qb
-        .build_query_as()
-        .fetch_all(pool)
-        .await
-        .map_err(|e| format!("统计模型 Top 失败: {e}"))?;
-    Ok(rows)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -583,19 +525,6 @@ mod tests {
         assert_eq!(s.count, 3);
         assert_eq!(s.total_cost, 35);
 
-        // 按小时分桶(4 条时间戳跨 5 分钟,应同桶)
-        let t = stats_trend(&pool, &LogFilter::default(), 3_600_000).await.unwrap();
-        assert_eq!(t.len(), 1);
-        assert_eq!(t[0].1, 4);
-        assert_eq!(t[0].2, 35);
-
-        let ch = stats_by_channel(&pool, &LogFilter::default()).await.unwrap();
-        assert_eq!(ch.len(), 2);
-        assert!(ch.contains(&("A".into(), 2)) && ch.contains(&("B".into(), 2)));
-
-        let m = stats_top_models(&pool, &LogFilter::default(), 10).await.unwrap();
-        assert_eq!(m.len(), 3); // gpt-a / gpt-b / claude-x
-        assert_eq!(m[0].1, 2); // gpt-a 出现两次
         drop(pool);
         std::fs::remove_dir_all(&dir).ok();
     }

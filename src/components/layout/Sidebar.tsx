@@ -4,7 +4,6 @@ import {
   Coins,
   KeyRound,
   LayoutDashboard,
-  ScrollText,
   Settings,
   Waypoints,
   type LucideIcon,
@@ -20,7 +19,6 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { key: "dashboard", label: "数据总览", icon: LayoutDashboard },
-  { key: "logs", label: "请求日志", icon: ScrollText },
   { key: "channels", label: "渠道管理", icon: Cable },
   { key: "keys", label: "密钥管理", icon: KeyRound },
   { key: "pricing", label: "模型定价", icon: Coins },

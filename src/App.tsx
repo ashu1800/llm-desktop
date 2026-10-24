@@ -7,7 +7,6 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
 import { UpdateDialog } from "@/components/UpdateDialog";
 import { DashboardPage } from "@/pages/DashboardPage";
-import { LogsPage } from "@/pages/LogsPage";
 import { ChannelsPage } from "@/pages/ChannelsPage";
 import { KeysPage } from "@/pages/KeysPage";
 import { PricingPage } from "@/pages/PricingPage";
@@ -51,7 +50,6 @@ export default function App() {
         <TopBar page={page} />
         <main className="flex-1 overflow-auto bg-muted/30 p-6">
           {page === "dashboard" && <DashboardPage />}
-          {page === "logs" && <LogsPage />}
           {page === "channels" && <ChannelsPage />}
           {page === "keys" && <KeysPage />}
           {page === "pricing" && <PricingPage />}

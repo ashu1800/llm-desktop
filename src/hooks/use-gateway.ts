@@ -51,26 +51,6 @@ export function useStats(filter: LogFilter) {
   });
 }
 
-export function useTrend(filter: LogFilter, bucket: "hour" | "day") {
-  return useQuery({
-    queryKey: ["trend", filter, bucket],
-    queryFn: () => api.getTrend(filter, bucket),
-  });
-}
-
-export function useChannelStats(filter: LogFilter) {
-  return useQuery({
-    queryKey: ["channelStats", filter],
-    queryFn: () => api.getChannelStats(filter),
-  });
-}
-
-export function useModelStats(filter: LogFilter) {
-  return useQuery({
-    queryKey: ["modelStats", filter],
-    queryFn: () => api.getModelStats(filter),
-  });
-}
 
 // 事件推送为主、低频轮询兜底,保证状态徽标即时更新
 export function useServiceStatus() {
