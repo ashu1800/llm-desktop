@@ -5,6 +5,7 @@ import { useUpdater } from "@/hooks/use-updater";
 import { useAppStore } from "@/stores/app-store";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
+import { UpdateDialog } from "@/components/UpdateDialog";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { LogsPage } from "@/pages/LogsPage";
 import { ChannelsPage } from "@/pages/ChannelsPage";
@@ -15,25 +16,37 @@ import type { PageKey } from "@/lib/types";
 
 export default function App() {
   const [page, setPage] = useState<PageKey>("dashboard");
+  const [updateOpen, setUpdateOpen] = useState(false);
   useGatewayEvents();
   useThemeEffect();
   const resolvedTheme = useAppStore((s) => s.resolvedTheme);
 
-  // 启动静默检查更新(6h 节流);发现新版本时 toast 提醒,安装入口在设置页
-  const { state: updateState } = useUpdater({ auto: true });
+  // 启动检查更新;发现新版本时 toast 提醒,侧栏出现"更新"入口,点开是更新弹窗
+  const updater = useUpdater({ auto: true });
+  const { state: updateState } = updater;
   const updateNotified = useRef(false);
   useEffect(() => {
     if (updateState.phase === "available" && !updateNotified.current) {
       updateNotified.current = true;
       toast.info(`发现新版本 v${updateState.nextVersion}`, {
-        description: "前往「应用设置 → 软件更新」下载安装",
+        description: "点击侧栏「更新」查看更新内容并安装",
       });
     }
   }, [updateState.phase, updateState.nextVersion]);
+  // 有待装更新(已发现/下载中/待重启/下载失败可重试)时显示入口
+  const updatePending =
+    ["available", "downloading", "ready"].includes(updateState.phase) ||
+    (updateState.phase === "error" && updateState.pendingUpdate);
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <Sidebar page={page} onNavigate={setPage} />
+      <Sidebar
+        page={page}
+        onNavigate={setPage}
+        updateAvailable={updatePending}
+        onOpenUpdate={() => setUpdateOpen(true)}
+        version={updateState.currentVersion}
+      />
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar page={page} />
         <main className="flex-1 overflow-auto bg-muted/30 p-6">
@@ -45,6 +58,11 @@ export default function App() {
           {page === "settings" && <SettingsPage />}
         </main>
       </div>
+      <UpdateDialog
+        open={updateOpen}
+        onOpenChange={setUpdateOpen}
+        updater={updater}
+      />
       <Toaster position="top-center" richColors theme={resolvedTheme} />
     </div>
   );

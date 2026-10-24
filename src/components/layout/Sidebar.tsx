@@ -1,4 +1,5 @@
 import {
+  ArrowUp,
   Cable,
   Coins,
   KeyRound,
@@ -29,9 +30,21 @@ const NAV_ITEMS: NavItem[] = [
 interface SidebarProps {
   page: PageKey;
   onNavigate: (page: PageKey) => void;
+  /** 检测到新版本时在版本号旁显示"更新"入口 */
+  updateAvailable?: boolean;
+  /** 点击"更新"打开更新弹窗 */
+  onOpenUpdate?: () => void;
+  /** 当前应用版本(getVersion 异步获取) */
+  version?: string | null;
 }
 
-export function Sidebar({ page, onNavigate }: SidebarProps) {
+export function Sidebar({
+  page,
+  onNavigate,
+  updateAvailable,
+  onOpenUpdate,
+  version,
+}: SidebarProps) {
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r bg-muted">
       <div className="flex h-14 items-center gap-2.5 border-b px-4">
@@ -60,7 +73,19 @@ export function Sidebar({ page, onNavigate }: SidebarProps) {
           </button>
         ))}
       </nav>
-      <div className="border-t p-3 text-[11px] text-muted-foreground">v0.1.0</div>
+      <div className="flex items-center justify-between border-t p-3 text-[11px] text-muted-foreground">
+        <span>{version ? `v${version}` : ""}</span>
+        {updateAvailable && (
+          <button
+            onClick={onOpenUpdate}
+            title="查看更新内容并安装"
+            className="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 font-medium text-primary transition-colors hover:bg-primary/20"
+          >
+            <ArrowUp className="h-3 w-3" />
+            更新
+          </button>
+        )}
+      </div>
     </aside>
   );
 }

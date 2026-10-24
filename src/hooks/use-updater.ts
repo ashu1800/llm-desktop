@@ -27,10 +27,6 @@ export interface UpdaterState {
   pendingUpdate: boolean;
 }
 
-const LAST_CHECK_KEY = "update.lastCheckMs";
-/** 启动静默检查最小间隔(6 小时),手动检查不受限 */
-const AUTO_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
-
 // 模块级共享:App(启动自动)与设置页(手动)两个 hook 实例共用同一次网络检查
 type CheckOutcome = { update: Update | null } | { error: string };
 let inFlightCheck: Promise<CheckOutcome> | null = null;
@@ -40,7 +36,6 @@ function doCheck(): Promise<CheckOutcome> {
     inFlightCheck = (async () => {
       try {
         const update = await check();
-        localStorage.setItem(LAST_CHECK_KEY, String(Date.now()));
         return { update };
       } catch (e) {
         return { error: String(e) };
@@ -119,17 +114,14 @@ export function useUpdater(options?: { auto?: boolean }) {
     await relaunch();
   }, []);
 
-  // 当前版本 + 启动静默检查(6h 节流;失败静默,不打扰)
+  // 当前版本 + 启动检查(每次启动一次;失败静默,不打扰)
   useEffect(() => {
     let disposed = false;
     getVersion()
       .then((v) => !disposed && setState((s) => ({ ...s, currentVersion: v })))
       .catch(() => {});
     if (auto) {
-      const last = Number(localStorage.getItem(LAST_CHECK_KEY) ?? 0);
-      if (Date.now() - last > AUTO_CHECK_INTERVAL_MS) {
-        runCheck().catch(() => {});
-      }
+      runCheck().catch(() => {});
     }
     return () => {
       disposed = true;

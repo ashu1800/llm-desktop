@@ -23,6 +23,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 发布说明需要自上个标签以来的完整提交历史
 
       # 标签与 tauri.conf.json 版本不一致会发布出"永远不触发客户端更新"的版本
       - name: Verify tag matches app version
@@ -34,6 +36,34 @@ jobs:
             echo "::error::标签 ${GITHUB_REF_NAME} 与 tauri.conf.json 版本 ${CFG} 不一致;请同步版本号(tauri.conf.json / package.json / Cargo.toml)后重新打附注标签"
             exit 1
           fi
+
+      # 从上个标签以来的提交生成分类更新说明(新功能/错误修复/改进),供更新弹窗按版本渲染
+      - name: Generate release notes from commits
+        id: notes
+        shell: bash
+        run: |
+          set -e
+          PREV_TAG=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          RANGE="${PREV_TAG:+${PREV_TAG}..}HEAD"
+          NOTES=$(mktemp)
+          emit() {
+            local header="$1" pattern="$2" items
+            items=$(git log "${RANGE}" --pretty=format:%s | grep -iE "${pattern}" | sed -E 's/^[a-zA-Z]+(\([^)]*\))?[::][[:space:]]*/- /' || true)
+            if [ -n "${items}" ]; then
+              { echo "### ${header}"; echo "${items}"; echo ""; } >> "${NOTES}"
+            fi
+          }
+          emit "新功能" "^feat"
+          emit "错误修复" "^fix"
+          emit "改进" "^(ui|refactor|perf|chore|docs|build|ci|style|test)"
+          if [ ! -s "${NOTES}" ]; then
+            echo "- 稳定性修复与体验优化" > "${NOTES}"
+          fi
+          {
+            echo "body<<NOTES_EOF"
+            cat "${NOTES}"
+            echo "NOTES_EOF"
+          } >> "${GITHUB_OUTPUT}"
 
       - uses: pnpm/action-setup@v4
         with:
@@ -62,7 +92,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "LLM Gateway ${{ github.ref_name }}"
-          releaseBody: "下载 llm-desktop_*_x64-setup.exe 安装;已安装旧版本的用户将自动收到更新。"
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: false
           prerelease: false
           # 生成 latest.json 并上传到 Release(updater 端点指向 releases/latest/download/latest.json)
