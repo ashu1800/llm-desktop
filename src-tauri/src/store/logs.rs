@@ -368,7 +368,7 @@ pub async fn stats_summary(pool: &SqlitePool, f: &LogFilter) -> Result<StatsSumm
         error_count,
         prompt_tokens: prompt,
         completion_tokens: completion,
-        cache_read: cache_read,
+        cache_read,
     })
 }
 
