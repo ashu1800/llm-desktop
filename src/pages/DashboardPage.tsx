@@ -7,6 +7,7 @@ import {
   CircleCheck,
   CircleDollarSign,
   Coins,
+  Database,
   Link2,
   Loader2,
   Pause,
@@ -336,19 +337,45 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
         </span>
       </td>
       <td className="py-2.5 pr-3 font-mono text-xs leading-5">
-        <div>
-          ↑{fmtK(l.promptTokens)} ↓{fmtK(l.completionTokens)}
-          {l.cacheWrite > 0 && (
-            <span className="text-blue-500"> ⟳{fmtK(l.cacheWrite)}</span>
-          )}
+        <div className="flex items-center gap-2.5">
+          <span className="text-orange-500" title={`总输入 ${fmtK(l.promptTokens)}(含缓存)`}>
+            ↑{fmtK(l.promptTokens - l.cacheRead - l.cacheWrite)}
+          </span>
+          <span className="text-violet-500" title={`总输出 ${fmtK(l.completionTokens)}`}>
+            ↓{fmtK(l.completionTokens)}
+          </span>
         </div>
-        <div className="text-muted-foreground">
-          命中 {cacheHitRate(l.cacheRead, l.promptTokens)}
+        <div className="flex items-center gap-1 text-muted-foreground">
+          <Database className="h-3 w-3" />
+          <span className="text-emerald-500" title="缓存命中词元">
+            {fmtK(l.cacheRead)}
+          </span>
+          <span className="text-violet-500">
+            {cacheHitRate(l.cacheRead, l.promptTokens)}
+          </span>
         </div>
       </td>
-      <td className="py-2.5 pr-3 font-mono text-xs leading-5">
-        <div>{l.isStream ? `首字 ${fmtMs(l.ttftMs)}` : "首字 —"}</div>
-        <div className="text-muted-foreground">耗时 {fmtMs(l.totalMs)}</div>
+      {/* 流式正常色,非流式整块淡色以字体颜色区分 */}
+      <td className={cn("py-2.5 pr-3 font-mono text-xs leading-5", !l.isStream && "text-muted-foreground")}>
+        <div className="space-y-0.5">
+          <div className="flex items-center gap-1.5">
+            <span className="h-3 w-0.5 shrink-0 rounded-full bg-zinc-400" />
+            <span className="text-muted-foreground">首字</span>
+            <span>{l.isStream ? fmtMs(l.ttftMs) : "—"}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="h-3 w-0.5 shrink-0 rounded-full bg-sky-500" />
+            <span className="text-muted-foreground">耗时</span>
+            <span>{fmtMs(l.totalMs)}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="h-3 w-0.5 shrink-0 rounded-full bg-violet-500" />
+            <span className="text-muted-foreground">速度</span>
+            <span>
+              {l.isStream && l.speed != null ? `${l.speed.toFixed(1)} tok/s` : "—"}
+            </span>
+          </div>
+        </div>
       </td>
       <td className="py-2.5 pr-3 text-right font-mono text-xs">
         {l.cost != null && (
@@ -358,16 +385,6 @@ function LogRow({ log: l, onDetail }: { log: LogItem; onDetail: () => void }) {
           </span>
         )}
         {l.cost == null && <span className="text-muted-foreground">—</span>}
-      </td>
-      <td className="py-2.5 pr-3 text-xs">
-        <div className="flex items-center gap-1">
-          <Badge variant={l.isStream ? "success" : "muted"} className="px-1">
-            {l.isStream ? "流" : "非流"}
-          </Badge>
-          {l.isStream && l.speed != null && (
-            <span className="font-mono">{l.speed.toFixed(1)} tok/s</span>
-          )}
-        </div>
       </td>
       <td className="py-2.5 pr-3">
         <StatusCell status={l.status} />
@@ -672,9 +689,8 @@ export function DashboardPage() {
                   <th className="py-2 pr-3 font-medium">模型</th>
                   <th className="py-2 pr-3 font-medium">渠道</th>
                   <th className="py-2 pr-3 font-medium">词元</th>
-                  <th className="py-2 pr-3 font-medium">耗时</th>
+                  <th className="py-2 pr-3 font-medium">任务耗时</th>
                   <th className="py-2 pr-3 text-right font-medium">费用</th>
-                  <th className="py-2 pr-3 font-medium">速度</th>
                   <th className="py-2 pr-3 font-medium">状态</th>
                   <th className="py-2 pr-3 font-medium">密钥</th>
                   <th className="py-2 pr-3 font-medium">客户端</th>

@@ -172,7 +172,7 @@ pub async fn backfill_costs(
             cache_read: cache_read.max(0),
             cache_write: cache_write.max(0),
         };
-        let cost = crate::billing::compute_cost_fen(p, &usage);
+        let cost = crate::billing::compute_cost(p, &usage);
         let r = sqlx::query("UPDATE request_logs SET cost=? WHERE id=? AND cost IS NULL")
             .bind(cost)
             .bind(id)
@@ -378,7 +378,12 @@ mod tests {
     use crate::billing::pricing::{PriceEntry, PriceTable};
 
     async fn test_pool(tag: &str) -> (SqlitePool, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!("llm-desktop-logs-{tag}-{}", std::process::id()));
+        // 线程 id 参与命名:cargo test 并发跑测试时共享进程 id,目录撞名会互踩迁移
+        let dir = std::env::temp_dir().join(format!(
+            "llm-desktop-logs-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let pool = crate::store::init_pool(&dir.join("t.db")).await.unwrap();
         (pool, dir)
@@ -434,10 +439,10 @@ mod tests {
                 .fetch_all(&pool)
                 .await
                 .unwrap();
-        // 1 元/1M 输入 + 2 元/1M 输出 → 100 + 100 = 200 分
-        assert_eq!(costs[0], ("gpt-x".into(), Some(200)));
-        // 3 元/1M + 4 元/1M → 300 + 200 = 500 分
-        assert_eq!(costs[1], ("mapped-only".into(), Some(500)));
+        // 1M 输入 ×1 元/M + 0.5M 输出 ×2 元/M = 2 元 = 2_000_000 微元
+        assert_eq!(costs[0], ("gpt-x".into(), Some(2_000_000)));
+        // 1M ×3 元/M + 0.5M ×4 元/M = 5 元 = 5_000_000 微元
+        assert_eq!(costs[1], ("mapped-only".into(), Some(5_000_000)));
         assert_eq!(costs[2].1, None);
         assert_eq!(costs[3].1, Some(7));
         drop(pool);
@@ -516,6 +521,7 @@ mod tests {
 
         let s = stats_summary(&pool, &LogFilter::default()).await.unwrap();
         assert_eq!(s.count, 4);
+        // 单位现为微元;测试种子数据 10+20+5 = 35(原样求和,不做换算)
         assert_eq!(s.total_cost, 35);
         assert_eq!(s.error_count, 1);
 

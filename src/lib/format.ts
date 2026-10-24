@@ -1,9 +1,9 @@
 // 展示格式化:费用(¥,6 位小数)、token 千分位 K 缩写、时长等(PRD §3.7)
 
-/** 人民币分 → ¥ 元,保留 6 位小数 */
+/** 人民币微元(1e-6 元)→ ¥ 元,保留 6 位小数 */
 export function fmtYuan(fen: number | null | undefined): string {
   if (fen == null) return "—";
-  return `¥${(fen / 100).toFixed(6)}`;
+  return `¥${(fen / 1_000_000).toFixed(6)}`;
 }
 
 /** 千分位 K 缩写:940 → 940,12345 → 12.3K,1234567 → 1.2M */
@@ -30,10 +30,10 @@ export function fmtFullTime(ts: number): string {
   return new Date(ts).toLocaleString("zh-CN", { hour12: false });
 }
 
-/** 缓存命中率:cache_read / 总输入(prompt) */
+/** 缓存命中率:cache_read / 总输入(prompt),保留两位小数 */
 export function cacheHitRate(cacheRead: number, prompt: number): string {
   if (prompt <= 0) return "—";
-  return `${Math.round((cacheRead / prompt) * 100)}%`;
+  return `${((cacheRead / prompt) * 100).toFixed(2)}%`;
 }
 
 /** 与 Rust PriceTable::match_for 一致:精确优先,通配取最后一条命中 */

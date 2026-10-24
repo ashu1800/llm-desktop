@@ -314,7 +314,7 @@ async fn gateway_inner(
             if status == 200 {
                 if is_stream {
                     match start_stream(
-                        &state, resp, ch, &ir, entry, started, &key, tag.clone(), &model_in,
+                        &state, resp, ch, &ir, entry, started, t_try, &key, tag.clone(), &model_in,
                         &mapped, &client_ua, &mut attempts, req_snapshot.clone(),
                         last_dropped.clone(), resp_id.clone(), completion.clone(),
                     )
@@ -875,6 +875,9 @@ async fn start_stream(
     ir: &CanonicalRequest,
     entry: EntryProto,
     started: Instant,
+    // TTFT 计时起点 = 发出上游请求时(t_try),而非拿到响应头之后:
+    // 首字应覆盖建连 + 上游排队 + 提示词处理的完整等待
+    ttft_start: Instant,
     key: &auth::AuthedKey,
     tag: Option<String>,
     model_in: &str,
@@ -886,7 +889,6 @@ async fn start_stream(
     resp_id: Option<String>,
     completion: Option<(String, Vec<Message>)>,
 ) -> Result<Response, FailReason> {
-    let t = Instant::now();
     let timeouts = effective_timeouts(state, ch);
     // TTFT 超时:等待首个字节;此时还未向客户端写任何字节,可安全 failover
     let mut bstream = resp.bytes_stream();
@@ -896,14 +898,17 @@ async fn start_stream(
             return Err(fail(
                 format!("首字超时({}s):上游未产生任何输出", timeouts.ttft.as_secs()),
                 Some(200),
-                t,
+                ttft_start,
             ))
         }
-        Ok(None) => return Err(fail("上游流为空".into(), Some(200), t)),
-        Ok(Some(Err(e))) => return Err(fail(format!("上游流读取失败: {e}"), Some(200), t)),
+        Ok(None) => return Err(fail("上游流为空".into(), Some(200), ttft_start)),
+        Ok(Some(Err(e))) => {
+            return Err(fail(format!("上游流读取失败: {e}"), Some(200), ttft_start))
+        }
         Ok(Some(Ok(bytes))) => bytes,
     };
-    let ttft_ms = t.elapsed().as_millis() as i64;
+    // 首字耗时 = 发出上游请求 → 收到首个输出字节
+    let ttft_ms = ttft_start.elapsed().as_millis() as i64;
 
     let passthrough = is_passthrough(entry, ch.protocol);
     // 成功尝试计入 attempts;流已开始即视为上游受理成功(开始后的中断不记账、不重试)
@@ -1336,7 +1341,7 @@ fn finalize_log(input: FinalizeInput) {
         .cloned();
     drop(prices);
     let success = (200..300).contains(&status) && error.is_none();
-    let cost = price.as_ref().map(|p| billing::compute_cost_fen(p, &usage));
+    let cost = price.as_ref().map(|p| billing::compute_cost(p, &usage));
     let unpriced = success && cost.is_none();
 
     let entry = RequestLog {

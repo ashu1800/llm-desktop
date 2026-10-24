@@ -19,14 +19,17 @@ impl Usage {
 /// 费用公式(PRD §3.6):
 /// cost = (prompt − cache_read − cache_write) × 输入价 + cache_read × 缓存读价
 ///        + cache_write × 缓存写价 + completion × 输出价   (单价均 元/1M token)
-pub fn compute_cost_fen(price: &pricing::PriceEntry, usage: &Usage) -> i64 {
+///
+/// 返回值单位为**微元**(1e-6 元,整数):旧「分」粒度下小额请求(如缓存长上下文
+/// 0.0157 元)被四舍五入到 2 分,虚高近 30%;微元与 UI 的 6 位小数显示精确对齐。
+pub fn compute_cost(price: &pricing::PriceEntry, usage: &Usage) -> i64 {
     let plain_input = (usage.prompt - usage.cache_read - usage.cache_write).max(0) as f64;
     let yuan = (plain_input * price.input
         + usage.cache_read as f64 * price.cache_read
         + usage.cache_write as f64 * price.cache_write
         + usage.completion as f64 * price.output)
         / 1_000_000.0;
-    (yuan * 100.0).round() as i64
+    (yuan * 1_000_000.0).round() as i64
 }
 
 #[cfg(test)]
@@ -50,8 +53,28 @@ mod tests {
             cache_read: 200_000,
             cache_write: 100_000,
         };
-        // (700_000*1 + 200_000*0.1 + 100_000*1.25 + 500_000*2)/1M = 0.7+0.02+0.125+1.0 = 1.845 元 = 184.5 分 → 185(四舍五入)
-        assert_eq!(compute_cost_fen(&p, &u), 185);
+        // (700_000*1 + 200_000*0.1 + 100_000*1.25 + 500_000*2)/1M = 1.845 元 = 1_845_000 微元
+        assert_eq!(compute_cost(&p, &u), 1_845_000);
+    }
+
+    #[test]
+    fn small_amount_keeps_precision() {
+        // 缓存长上下文小额场景:0.0157 元,分粒度会被抹成 2 分(虚高 27%)
+        let p = pricing::PriceEntry {
+            pattern: "m".into(),
+            input: 0.8,
+            output: 2.8,
+            cache_read: 0.23,
+            cache_write: 0.0,
+        };
+        let u = Usage {
+            prompt: 67_066,
+            completion: 88,
+            cache_read: 66_944,
+            cache_write: 0,
+        };
+        // (122*0.8 + 66944*0.23 + 88*2.8)/1M = 0.01574112 元 → 15741 微元
+        assert_eq!(compute_cost(&p, &u), 15_741);
     }
 
     #[test]
@@ -63,6 +86,6 @@ mod tests {
             cache_read: 0.0,
             cache_write: 0.0,
         };
-        assert_eq!(compute_cost_fen(&p, &Usage::default()), 0);
+        assert_eq!(compute_cost(&p, &Usage::default()), 0);
     }
 }

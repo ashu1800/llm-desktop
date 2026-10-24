@@ -40,7 +40,11 @@ mod tests {
 
     #[tokio::test]
     async fn migrations_apply_and_settings_roundtrip() {
-        let dir = std::env::temp_dir().join(format!("llm-desktop-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "llm-desktop-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let db_path = dir.join("test.db");
         let pool = init_pool(&db_path).await.unwrap();
@@ -62,7 +66,11 @@ mod tests {
 
     #[tokio::test]
     async fn channel_and_key_crud() {
-        let dir = std::env::temp_dir().join(format!("llm-desktop-crud-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "llm-desktop-crud-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let pool = init_pool(&dir.join("t.db")).await.unwrap();
 

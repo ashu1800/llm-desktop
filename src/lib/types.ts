@@ -162,6 +162,7 @@ export interface LogItem {
   ttftMs: number | null;
   totalMs: number | null;
   speed: number | null;
+  /** 人民币微元(1e-6 元) */
   cost: number | null;
   client: string | null;
 }
@@ -173,7 +174,7 @@ export interface LogDetail extends LogItem {
 
 export interface StatsSummary {
   count: number;
-  /** 人民币分 */
+  /** 人民币微元(1e-6 元) */
   totalCost: number;
   avgTtftMs: number | null;
   avgSpeed: number | null;
