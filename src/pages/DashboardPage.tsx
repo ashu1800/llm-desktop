@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { motion } from "framer-motion";
+import { toast } from "sonner";
 import {
   currentMonitor,
   getCurrentWindow,
@@ -9,16 +11,19 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
+  Check,
   ChevronLeft,
   ChevronRight,
   CircleCheck,
   CircleDollarSign,
   Coins,
+  Copy,
   Database,
   Link2,
   Loader2,
   Percent,
   RefreshCw,
+  RotateCcw,
   ScrollText,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -62,6 +67,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { useAppStore } from "@/stores/app-store";
+import { ProtocolBadge } from "@/components/ProtocolBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -338,11 +344,11 @@ function StatCard({
   hint: string;
 }) {
   return (
-    <Card className="py-4">
+    <Card className="py-4 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
       <CardContent className="flex items-center gap-3 px-4 py-0">
         <div
           className={cn(
-            "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg",
+            "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg shadow-2xs",
             tile,
           )}
         >
@@ -352,13 +358,21 @@ function StatCard({
           <div className="truncate text-xs text-muted-foreground">{label}</div>
           <div
             className={cn(
-              "truncate text-xl font-semibold tabular-nums leading-tight",
+              "truncate text-xl font-semibold tabular-nums leading-tight tracking-tight",
               valueClass,
             )}
           >
-            {value}
+            <motion.span
+              key={value}
+              initial={{ opacity: 0, y: 3 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.18, ease: "easeOut" }}
+              className="inline-block"
+            >
+              {value}
+            </motion.span>
           </div>
-          <div className="truncate text-xs text-muted-foreground">{hint}</div>
+          <div className="truncate text-xs text-muted-foreground/80">{hint}</div>
         </div>
       </CardContent>
     </Card>
@@ -376,29 +390,62 @@ function prettyBody(raw: string | null): string {
   }
 }
 
-function Kv({ k, v }: { k: string; v: string }) {
+function Kv({ k, v }: { k: string; v: React.ReactNode }) {
   return (
-    <div className="flex gap-2">
+    <div className="flex items-center justify-between gap-2">
       <span className="shrink-0 text-muted-foreground">{k}</span>
-      <span className="break-all text-right">{v}</span>
+      <span className="break-all text-right font-medium">{v}</span>
     </div>
   );
 }
 
-function KvBox({ k, v }: { k: string; v: string }) {
+function KvBox({ k, v }: { k: string; v: React.ReactNode }) {
   return (
-    <div className="rounded-md border bg-muted/40 px-3 py-2">
+    <div className="rounded-lg border bg-muted/30 px-3 py-2 shadow-2xs">
       <div className="text-xs text-muted-foreground">{k}</div>
-      <div className="font-mono text-sm font-medium">{v}</div>
+      <div className="font-mono text-sm font-semibold tabular-nums text-foreground">{v}</div>
     </div>
   );
 }
 
 function PreBlock({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      toast.success("已复制到剪贴板");
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast.error("复制失败");
+    }
+  };
+
   return (
-    <pre className="max-h-64 overflow-auto rounded-md border bg-muted/40 p-3 font-mono text-xs whitespace-pre-wrap break-all">
-      {text}
-    </pre>
+    <div className="group relative rounded-xl border border-border/80 bg-muted/30 transition-all focus-within:border-primary/40">
+      <div className="absolute right-2.5 top-2.5 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+        <button
+          onClick={handleCopy}
+          className="inline-flex items-center gap-1 rounded-md border bg-background/90 px-2 py-1 text-[11px] font-medium text-muted-foreground shadow-2xs backdrop-blur-xs transition-colors hover:bg-accent hover:text-foreground active:scale-95"
+          title="复制内容"
+        >
+          {copied ? (
+            <>
+              <Check className="h-3 w-3 text-success" />
+              <span className="text-success">已复制</span>
+            </>
+          ) : (
+            <>
+              <Copy className="h-3 w-3" />
+              <span>复制</span>
+            </>
+          )}
+        </button>
+      </div>
+      <pre className="max-h-64 overflow-auto p-3.5 font-mono text-xs leading-relaxed whitespace-pre-wrap break-all text-foreground/90">
+        {text}
+      </pre>
+    </div>
   );
 }
 
@@ -451,7 +498,20 @@ function LogDetailDialog({
             <div className="space-y-2">
               <h4 className="text-sm font-semibold">基本信息</h4>
               <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
-                <Kv k="入口协议 → 上游协议" v={`${detail.protocolIn} → ${detail.protocolUp ?? "—"}`} />
+                <Kv
+                  k="协议流向"
+                  v={
+                    <span className="inline-flex items-center gap-1.5">
+                      <ProtocolBadge protocol={detail.protocolIn} />
+                      <span className="text-muted-foreground/60">→</span>
+                      {detail.protocolUp ? (
+                        <ProtocolBadge protocol={detail.protocolUp} />
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </span>
+                  }
+                />
                 <Kv k="模型映射" v={detail.mappedModel ? `${detail.model} → ${detail.mappedModel}` : "无"} />
                 <Kv k="渠道" v={detail.channelName ?? "—"} />
                 <Kv k="密钥" v={detail.keyName ?? "—"} />
@@ -518,28 +578,94 @@ function LogDetailDialog({
               )}
             </div>
 
-            <div className="space-y-2">
-              <h4 className="text-sm font-semibold">
-                重试链({attempts.length} 次尝试)
-              </h4>
-              <div className="space-y-1.5">
-                {attempts.map((a, i) => (
-                  <div
-                    key={i}
-                    className="rounded-md border px-3 py-2 text-xs leading-5"
-                  >
-                    <span className="font-medium">#{i + 1} {a.channel ?? "—"}</span>
-                    <span className="ml-2 text-muted-foreground">
-                      {a.status != null ? `HTTP ${a.status}` : "无响应"} · {fmtMs(a.durationMs ?? null)}
-                    </span>
-                    {a.error && <div className="text-destructive">{a.error}</div>}
-                    {a.droppedFields?.length ? (
-                      <div className="text-muted-foreground">
-                        丢弃字段:{a.droppedFields.join(", ")}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-semibold text-foreground">
+                  故障转移与链路追踪
+                </h4>
+                <span className="font-mono text-xs text-muted-foreground">
+                  共 {attempts.length} 次尝试
+                </span>
+              </div>
+              <div className="relative space-y-3 pl-5 before:absolute before:bottom-2 before:left-2 before:top-2 before:w-0.5 before:bg-border/80">
+                {attempts.map((a, i) => {
+                  const isSuccess =
+                    !a.error &&
+                    (a.status == null || (a.status >= 200 && a.status < 400));
+                  const isLast = i === attempts.length - 1;
+                  return (
+                    <div key={i} className="relative">
+                      {/* 时间轴节点光点 */}
+                      <span
+                        className={cn(
+                          "absolute -left-[17px] top-2 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-background ring-2",
+                          isSuccess
+                            ? "ring-success/70"
+                            : "ring-destructive/70",
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            "h-1.5 w-1.5 rounded-full",
+                            isSuccess ? "bg-success" : "bg-destructive",
+                          )}
+                        />
+                      </span>
+
+                      {/* 追踪卡片 */}
+                      <div
+                        className={cn(
+                          "rounded-xl border p-2.5 text-xs shadow-2xs transition-all",
+                          isSuccess
+                            ? "border-success/30 bg-success/5"
+                            : "border-destructive/25 bg-destructive/5",
+                        )}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono text-[11px] text-muted-foreground/70">
+                              #{i + 1}
+                            </span>
+                            <span className="font-medium text-foreground">
+                              {a.channel ?? "未指定渠道"}
+                            </span>
+                            <span
+                              className={cn(
+                                "rounded-md px-1.5 py-0.5 font-mono text-[10px] font-semibold",
+                                isSuccess
+                                  ? "bg-success/15 text-success"
+                                  : "bg-destructive/15 text-destructive",
+                              )}
+                            >
+                              {a.status != null ? `HTTP ${a.status}` : "无响应"}
+                            </span>
+                          </div>
+                          <span className="font-mono text-xs tabular-nums text-muted-foreground">
+                            {fmtMs(a.durationMs ?? null)}
+                          </span>
+                        </div>
+
+                        {a.error && (
+                          <div className="mt-1.5 rounded-lg border border-destructive/20 bg-background/80 p-2 font-mono text-[11px] leading-relaxed text-destructive">
+                            {a.error}
+                          </div>
+                        )}
+
+                        {a.droppedFields?.length ? (
+                          <div className="mt-1 text-[11px] text-muted-foreground/80">
+                            协议转换已丢弃非标准字段: {a.droppedFields.join(", ")}
+                          </div>
+                        ) : null}
+
+                        {!isSuccess && !isLast && (
+                          <div className="mt-1.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                            ↳ 自动转移到下一优先级渠道
+                          </div>
+                        )}
                       </div>
-                    ) : null}
-                  </div>
-                ))}
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
@@ -561,15 +687,69 @@ function LogDetailDialog({
 // ---------- 状态点 ----------
 
 function StatusCell({ status }: { status: number }) {
-  const color =
-    status >= 500
-      ? "text-destructive"
-      : status >= 400
-        ? "text-warning"
-        : "text-success";
+  const isErr = status >= 500;
+  const isWarn = status >= 400 && status < 500;
   return (
-    <span className={cn("font-mono text-xs font-medium", color)}>
-      ● {status}
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-xs font-semibold tabular-nums border",
+        isErr
+          ? "border-destructive/30 bg-destructive/10 text-destructive shadow-2xs"
+          : isWarn
+            ? "border-warning/35 bg-warning/10 text-warning shadow-2xs"
+            : "border-success/30 bg-success/10 text-success shadow-2xs"
+      )}
+    >
+      <span
+        className={cn(
+          "h-1.5 w-1.5 rounded-full shrink-0",
+          isErr ? "bg-destructive animate-pulse" : isWarn ? "bg-warning" : "bg-success"
+        )}
+      />
+      {status}
+    </span>
+  );
+}
+
+// ---------- 智能品牌模型微标 ----------
+
+function ModelBadge({ model }: { model: string }) {
+  const m = model.toLowerCase();
+  let style = "border-border/80 bg-secondary/80 text-secondary-foreground";
+  let dotColor = "";
+
+  if (m.startsWith("claude") || m.includes("anthropic")) {
+    style = "border-primary/30 bg-primary/10 text-primary";
+    dotColor = "bg-primary";
+  } else if (
+    m.startsWith("gpt") ||
+    m.startsWith("o1") ||
+    m.startsWith("o3") ||
+    m.startsWith("chatgpt") ||
+    m.includes("openai")
+  ) {
+    style = "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400";
+    dotColor = "bg-emerald-500";
+  } else if (m.startsWith("gemini")) {
+    style = "border-indigo-500/30 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400";
+    dotColor = "bg-indigo-500";
+  } else if (m.startsWith("deepseek")) {
+    style = "border-cyan-500/30 bg-cyan-500/10 text-cyan-600 dark:text-cyan-400";
+    dotColor = "bg-cyan-500";
+  } else if (m.startsWith("qwen")) {
+    style = "border-violet-500/30 bg-violet-500/10 text-violet-600 dark:text-violet-400";
+    dotColor = "bg-violet-500";
+  }
+
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-md border px-1.5 py-0.5 font-mono text-xs font-medium whitespace-nowrap shadow-2xs select-none",
+        style
+      )}
+    >
+      {dotColor && <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", dotColor)} />}
+      {model}
     </span>
   );
 }
@@ -597,14 +777,15 @@ function LogRow({
   );
   const clientDisplay = clientAlias ?? l.client;
   return (
-    <tr className="border-b text-center last:border-0 hover:bg-accent/30">
+    <tr
+      onClick={onDetail}
+      className="group/row cursor-pointer border-b text-center transition-colors duration-150 hover:bg-accent/60 even:bg-muted/15 last:border-0"
+    >
       <td className="whitespace-nowrap py-1.5 pr-1 font-mono text-xs" title={fmtFullTime(l.ts)}>
         {fmtTime(l.ts)}
       </td>
       <td className="py-1.5 pr-1">
-        <Badge variant="secondary" className="whitespace-nowrap px-1.5 font-mono">
-          {l.model}
-        </Badge>
+        <ModelBadge model={l.model} />
       </td>
       {/* 推理等级:请求携带的 reasoning_effort(minimal/low/medium/high);无则占位 */}
       <td className="whitespace-nowrap py-1.5 pr-1">
@@ -743,7 +924,15 @@ function LogRow({
           「客户端」列的文字(截图里 deepseek-harness 被裁成 deepseek-harnes)。
           保留 border-l 做常驻分隔即可 */}
       <td className="whitespace-nowrap border-l py-1.5 pl-1">
-        <Button variant="ghost" size="sm" onClick={onDetail}>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 text-xs text-muted-foreground transition-colors group-hover/row:text-primary"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDetail();
+          }}
+        >
           详情
         </Button>
       </td>
@@ -801,6 +990,10 @@ export function DashboardPage() {
       : "—";
 
   const resetPage = () => setPage(0);
+  const activeFilterCount =
+    (channelFilter !== "all" ? 1 : 0) +
+    (keyFilter !== "all" ? 1 : 0) +
+    (modelFilter !== "all" ? 1 : 0);
 
   return (
     // flex 列布局:日志卡片 flex-1 弹性占满剩余视口高度,底部不留空白
@@ -841,24 +1034,34 @@ export function DashboardPage() {
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground">时间范围</span>
-          <div className="flex items-center rounded-lg border bg-card p-0.5">
-            {DASH_RANGES.map((r) => (
-              <button
-                key={r}
-                onClick={() => {
-                  setRange(r);
-                  resetPage();
-                }}
-                className={cn(
-                  "rounded-md px-2.5 py-1 text-xs transition-colors",
-                  range === r
-                    ? "bg-primary font-medium text-primary-foreground"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {TIME_RANGE_LABELS[r]}
-              </button>
-            ))}
+          <div className="relative flex items-center rounded-lg border border-border/80 bg-muted/60 p-0.5 shadow-2xs">
+            {DASH_RANGES.map((r) => {
+              const isActive = range === r;
+              return (
+                <button
+                  key={r}
+                  onClick={() => {
+                    setRange(r);
+                    resetPage();
+                  }}
+                  className={cn(
+                    "relative rounded-md px-2.5 py-1 text-xs font-medium transition-colors select-none",
+                    isActive
+                      ? "text-foreground font-semibold"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {isActive && (
+                    <motion.span
+                      layoutId="active-dash-range"
+                      className="absolute inset-0 rounded-md bg-background shadow-xs ring-1 ring-border/80"
+                      transition={{ type: "spring", stiffness: 450, damping: 35 }}
+                    />
+                  )}
+                  <span className="relative z-10">{TIME_RANGE_LABELS[r]}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
         <Select
@@ -918,6 +1121,24 @@ export function DashboardPage() {
             ))}
           </SelectContent>
         </Select>
+        {activeFilterCount > 0 && (
+          <button
+            onClick={() => {
+              setChannelFilter("all");
+              setKeyFilter("all");
+              setModelFilter("all");
+              resetPage();
+            }}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary shadow-2xs transition-all hover:bg-primary/20 active:scale-95"
+            title="清空当前所有过滤条件"
+          >
+            <RotateCcw className="h-3 w-3" />
+            <span>重置筛选</span>
+            <span className="flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
+              {activeFilterCount}
+            </span>
+          </button>
+        )}
       </div>
 
       {/* 汇总卡片:图标色块风,与筛选联动。
@@ -928,16 +1149,16 @@ export function DashboardPage() {
       <div ref={statsRef} className="grid grid-cols-4 gap-3">
         <StatCard
           icon={Link2}
-          tile="bg-[#8B7BE8]/15 text-[#8B7BE8]"
-          valueClass="text-[#6D5BD0] dark:text-[#A18FF0]"
+          tile="bg-gradient-to-br from-indigo-500/20 to-indigo-500/5 text-indigo-500 ring-1 ring-inset ring-indigo-500/25 shadow-2xs"
+          valueClass="text-indigo-600 dark:text-indigo-400"
           label="请求数量"
           value={stats ? String(stats.count) : "—"}
           hint={`失败 ${stats?.errorCount ?? 0} 次`}
         />
         <StatCard
           icon={CircleDollarSign}
-          tile="bg-[#D9A514]/15 text-[#D9A514]"
-          valueClass="text-[#A87E0B] dark:text-[#E0B33C]"
+          tile="bg-gradient-to-br from-amber-500/20 to-amber-500/5 text-amber-500 ring-1 ring-inset ring-amber-500/25 shadow-2xs"
+          valueClass="text-amber-600 dark:text-amber-400"
           label="消耗金额"
           value={stats ? fmtYuan(stats.totalCost) : "—"}
           // 有美元定价消耗时在副行分列展示;两种币种互不换算
@@ -949,16 +1170,16 @@ export function DashboardPage() {
         />
         <StatCard
           icon={ScrollText}
-          tile="bg-[#5FA8E8]/15 text-[#5FA8E8]"
-          valueClass="text-[#3E87C9] dark:text-[#7FBBF0]"
+          tile="bg-gradient-to-br from-sky-500/20 to-sky-500/5 text-sky-500 ring-1 ring-inset ring-sky-500/25 shadow-2xs"
+          valueClass="text-sky-600 dark:text-sky-400"
           label="词元数量"
           value={stats ? fmtK(stats.promptTokens + stats.completionTokens) : "—"}
           hint={`缓存命中率 ${stats ? cacheHitRate(stats.cacheRead, stats.promptTokens) : "—"}`}
         />
         <StatCard
           icon={CircleCheck}
-          tile="bg-[#5BAF6E]/15 text-[#5BAF6E]"
-          valueClass="text-[#3F9354] dark:text-[#7CC48D]"
+          tile="bg-gradient-to-br from-emerald-500/20 to-emerald-500/5 text-emerald-500 ring-1 ring-inset ring-emerald-500/25 shadow-2xs"
+          valueClass="text-emerald-600 dark:text-emerald-400"
           label="成功率"
           value={successRate}
           hint={`平均首字 ${stats?.avgTtftMs != null ? fmtMs(stats.avgTtftMs) : "—"}`}
@@ -968,33 +1189,45 @@ export function DashboardPage() {
       {/* 请求日志表(原"请求日志"页并入);min-h-0 允许 flex 收缩,内滚容器占满剩余高度 */}
       <Card className="flex min-h-0 flex-1 flex-col">
         <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
-          <CardTitle className="text-base">请求日志</CardTitle>
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <span>请求日志</span>
+            <span className="font-mono text-xs font-normal text-muted-foreground">
+              (共 {total.toLocaleString()} 条)
+            </span>
+          </CardTitle>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Button
               variant="ghost"
               size="icon"
               title="手动刷新"
+              className="h-8 w-8 text-muted-foreground transition-all hover:text-foreground active:scale-95"
               onClick={() => qc.invalidateQueries({ queryKey: ["logs"] })}
             >
-              <RefreshCw className={cn("h-4 w-4", isFetching && "animate-spin")} />
+              <RefreshCw className={cn("h-3.5 w-3.5", isFetching && "animate-spin")} />
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={safePage === 0}
-              onClick={() => setPage(Math.min(page, pageCount - 1) - 1)}
-            >
-              <ChevronLeft className="h-3.5 w-3.5" />
-            </Button>
-            {safePage + 1} / {pageCount}
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={safePage + 1 >= pageCount}
-              onClick={() => setPage(Math.min(page, pageCount - 1) + 1)}
-            >
-              <ChevronRight className="h-3.5 w-3.5" />
-            </Button>
+            <div className="flex items-center gap-1 rounded-lg border border-border/80 bg-muted/40 p-0.5 shadow-2xs">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 rounded-md"
+                disabled={safePage === 0}
+                onClick={() => setPage(Math.min(page, pageCount - 1) - 1)}
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+              </Button>
+              <span className="px-2 font-mono text-xs font-medium tabular-nums text-foreground">
+                {safePage + 1} <span className="text-muted-foreground/50">/</span> {pageCount}
+              </span>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 rounded-md"
+                disabled={safePage + 1 >= pageCount}
+                onClick={() => setPage(Math.min(page, pageCount - 1) + 1)}
+              >
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Button>
+            </div>
           </div>
         </CardHeader>
         {/* 内滚容器撑满卡片剩余空间:表头 sticky 钉住,底部与卡片边缘贴合 */}

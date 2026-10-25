@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
+import { AnimatePresence, motion } from "framer-motion";
 import { useGatewayEvents, useThemeEffect } from "@/hooks/use-gateway";
 import { useUpdater } from "@/hooks/use-updater";
 import { useAppStore } from "@/stores/app-store";
@@ -33,6 +34,29 @@ export default function App() {
       });
     }
   }, [updateState.phase, updateState.nextVersion]);
+
+  // 全局数字快捷键: Ctrl/Cmd + 1~5 切换页面
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+        const keyMap: Record<string, PageKey> = {
+          "1": "dashboard",
+          "2": "channels",
+          "3": "keys",
+          "4": "pricing",
+          "5": "settings",
+        };
+        const targetPage = keyMap[e.key];
+        if (targetPage) {
+          e.preventDefault();
+          setPage(targetPage);
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
   // 有待装更新(已发现/下载中/待重启/下载失败可重试)时显示入口
   const updatePending =
     ["available", "downloading", "ready"].includes(updateState.phase) ||
@@ -57,15 +81,22 @@ export default function App() {
             page === "dashboard" ? "overflow-hidden" : "overflow-auto",
           )}
         >
-          {page === "dashboard" && (
-            <div className="h-full">
-              <DashboardPage />
-            </div>
-          )}
-          {page === "channels" && <ChannelsPage />}
-          {page === "keys" && <KeysPage />}
-          {page === "pricing" && <PricingPage />}
-          {page === "settings" && <SettingsPage />}
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={page}
+              initial={{ opacity: 0, y: 5 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.14, ease: [0.22, 1, 0.36, 1] }}
+              className="h-full"
+            >
+              {page === "dashboard" && <DashboardPage />}
+              {page === "channels" && <ChannelsPage />}
+              {page === "keys" && <KeysPage />}
+              {page === "pricing" && <PricingPage />}
+              {page === "settings" && <SettingsPage />}
+            </motion.div>
+          </AnimatePresence>
         </main>
       </div>
       <UpdateDialog

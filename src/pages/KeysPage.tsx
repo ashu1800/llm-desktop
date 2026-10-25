@@ -1,7 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
+  AlertTriangle,
+  Check,
+  ChevronRight,
   Copy,
   GripVertical,
   KeyRound,
@@ -59,37 +62,66 @@ function formatTs(ts: number | null): string {
   return d.toLocaleString("zh-CN", { hour12: false });
 }
 
+function formatRelativeTime(ts: number | null): string {
+  if (!ts) return "从未调用";
+  const diffSecs = Math.floor((Date.now() - ts) / 1000);
+  if (diffSecs < 60) return "刚刚";
+  if (diffSecs < 3600) return `${Math.floor(diffSecs / 60)} 分钟前`;
+  if (diffSecs < 86400) return `${Math.floor(diffSecs / 3600)} 小时前`;
+  if (diffSecs < 86400 * 7) return `${Math.floor(diffSecs / 86400)} 天前`;
+  return formatTs(ts);
+}
+
 // ---------- 可排序渠道项 ----------
 
 function SortableChannel({
   id,
   name,
+  orderIndex,
   onRemove,
 }: {
   id: number;
   name: string;
+  orderIndex?: number;
   onRemove: () => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition } =
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id });
   return (
     <div
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
-      className="flex items-center gap-2 rounded-md border bg-background px-2 py-1.5"
+      className={cn(
+        "flex items-center gap-2 rounded-xl border px-2.5 py-1.5 transition-all select-none",
+        isDragging
+          ? "scale-[1.02] border-primary/60 bg-background/95 shadow-lg ring-2 ring-primary/20 z-30"
+          : "border-border/80 bg-background/80 shadow-2xs hover:border-border hover:bg-background"
+      )}
     >
       <button
-        className="cursor-grab touch-none text-muted-foreground"
+        className="cursor-grab active:cursor-grabbing touch-none rounded p-1 text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
         {...attributes}
         {...listeners}
+        title="拖拽调整优先级"
       >
-        <GripVertical className="h-4 w-4" />
+        <GripVertical className="h-3.5 w-3.5" />
       </button>
-      <Badge variant="secondary" className="px-1.5">
+      {orderIndex != null && (
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-bold text-primary ring-1 ring-inset ring-primary/25">
+          {orderIndex}
+        </span>
+      )}
+      <span className="text-xs font-medium text-foreground">
         {name}
-      </Badge>
+      </span>
       <div className="flex-1" />
-      <Button variant="ghost" size="icon" onClick={onRemove}>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-7 w-7 text-muted-foreground transition-colors hover:bg-destructive/15 hover:text-destructive"
+        onClick={onRemove}
+        title="移除渠道"
+      >
         <Trash2 className="h-3.5 w-3.5" />
       </Button>
     </div>
@@ -122,12 +154,20 @@ function useModelCandidates(
   }, [channels, selectedIds]);
 }
 
+/** 渠道能否服务该对外模型名——与后端 channel_supports 判定完全一致:
+ *  白名单为空 = 不限模型;白名单同时接受对外名与映射后的上游名(旧数据可能存的是上游名) */
+function channelSupportsModel(ch: Channel, m: string): boolean {
+  if (ch.models.length === 0) return true;
+  const mapped = ch.modelMap[m] ?? m;
+  return ch.models.includes(m) || ch.models.includes(mapped);
+}
+
 function ModelRoutingEditor({
   candidates,
   models,
   modelChannels,
   channelName,
-  channelsGlobalOrder,
+  selectedChannels,
   onModelsChange,
   onModelChannelsChange,
 }: {
@@ -137,10 +177,18 @@ function ModelRoutingEditor({
   models: string[];
   modelChannels: Record<string, number[]>;
   channelName: (id: number) => string;
-  channelsGlobalOrder: number[];
+  /** 密钥勾选且启用的渠道(按全局顺序) */
+  selectedChannels: Channel[];
   onModelsChange: (v: string[]) => void;
   onModelChannelsChange: (v: Record<string, number[]>) => void;
 }) {
+  // 模型级路由候选:只有"支持该模型"的渠道才进排序列表。
+  // 不支持的渠道在后端请求循环会被 channel_supports 跳过、永远分不到流量,
+  // 列进 UI 只会误导用户以为它在参与故障转移
+  const routingCandidates = (m: string) =>
+    selectedChannels
+      .filter((ch) => channelSupportsModel(ch, m))
+      .map((ch) => ch.id);
   const [filter, setFilter] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
   const limited = models.length > 0;
@@ -218,9 +266,14 @@ function ModelRoutingEditor({
                     onClick={() => setExpanded(expanded === m ? null : m)}
                   >
                     <Route className="h-3 w-3" />
-                    {modelChannels[m]?.length
-                      ? `${modelChannels[m].length} 渠道`
-                      : "按全局"}
+                    {(() => {
+                      // 只统计仍支持该模型的条目,与展开面板列出的渠道一致
+                      const cands = routingCandidates(m);
+                      const n = (modelChannels[m] ?? []).filter((id) =>
+                        cands.includes(id),
+                      ).length;
+                      return n ? `${n} 渠道` : "按全局";
+                    })()}
                   </Button>
                 )}
               </div>
@@ -229,7 +282,7 @@ function ModelRoutingEditor({
                   <ModelChannelOrder
                     model={m}
                     order={modelChannels[m] ?? []}
-                    candidates={channelsGlobalOrder}
+                    candidates={routingCandidates(m)}
                     channelName={channelName}
                     onChange={setModelOrder}
                     onClear={clearModelOrder}
@@ -266,7 +319,7 @@ function ModelChannelOrder({
   model: string;
   /** 当前模型的渠道顺序;空 = 跟随全局 */
   order: number[];
-  /** 密钥勾选的全部渠道(按全局顺序) */
+  /** 支持该模型的勾选渠道(按密钥全局顺序) */
   candidates: number[];
   channelName: (id: number) => string;
   onChange: (model: string, order: number[]) => void;
@@ -275,7 +328,8 @@ function ModelChannelOrder({
   const ordered = order
     .filter((id) => candidates.includes(id))
     .concat(candidates.filter((id) => !order.includes(id)));
-  const custom = order.length > 0;
+  // 已存顺序里没有任何仍支持该模型的渠道时,视同"跟随全局"(与行内徽标口径一致)
+  const custom = order.some((id) => candidates.includes(id));
 
   const toggle = (id: number) => {
     onChange(model, ordered.filter((x) => x !== id));
@@ -305,7 +359,8 @@ function ModelChannelOrder({
               <SortableChannel
                 key={id}
                 id={id}
-                name={`${i + 1}. ${channelName(id)}`}
+                orderIndex={i + 1}
+                name={channelName(id)}
                 onRemove={() => toggle(id)}
               />
             ))}
@@ -355,6 +410,7 @@ function KeyDialog({
   const [form, setForm] = useState<ApiKey | null>(editing);
   const [creating, setCreating] = useState(false);
   const [plaintext, setPlaintext] = useState(false);
+  const [copiedNewKey, setCopiedNewKey] = useState(false);
   useEffect(() => {
     setForm(editing);
     setCreating(editing?.id === 0);
@@ -411,6 +467,11 @@ function KeyDialog({
   const orderedSelected = form.channels
     .map((id) => ({ id, name: channelName(id) }))
     .filter((c) => selected.has(c.id));
+  // 模型级路由候选渠道:按密钥全局顺序,只取启用中的渠道
+  // (停用渠道后端请求循环直接跳过,与上方 useModelCandidates 的口径一致)
+  const selectedChannels = (channels ?? []).filter(
+    (ch) => selected.has(ch.id) && ch.enabled,
+  );
 
   const toggleChannel = (id: number) => {
     if (selected.has(id)) {
@@ -444,20 +505,56 @@ function KeyDialog({
         </DialogHeader>
         <div className="-mr-2 grid min-h-0 flex-1 gap-4 overflow-y-auto pr-2">
           {plaintext ? (
-            <div className="space-y-2">
-              <div className="rounded-md border bg-muted/40 p-3 text-center">
-                <code className="break-all font-mono text-sm">{form.key}</code>
+            <div className="space-y-4 py-2">
+              <div className="flex flex-col items-center text-center">
+                <div className="relative mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-500/15 text-emerald-600 ring-1 ring-inset ring-emerald-500/30 dark:text-emerald-400 shadow-2xs">
+                  <KeyRound className="h-6 w-6" />
+                </div>
+                <h3 className="text-base font-semibold text-foreground">
+                  API 访问凭据已安全生成
+                </h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  用于第三方客户端与应用通过网关调用大模型的专属认证密钥
+                </p>
               </div>
-              <Button
-                variant="outline"
-                className="w-full"
-                onClick={async () => {
-                  await navigator.clipboard.writeText(form.key);
-                  toast.success("已复制到剪贴板");
-                }}
-              >
-                <Copy className="h-4 w-4" /> 复制密钥
-              </Button>
+
+              {/* 明文金库代码舱 */}
+              <div className="relative rounded-xl border border-primary/30 bg-primary/5 p-4 shadow-2xs">
+                <div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground/80">密钥明文 (Secret Key)</span>
+                  <span className="text-[11px] font-mono">{form.name}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3 rounded-lg border border-border/80 bg-background/90 p-2.5 shadow-inner">
+                  <code className="select-all break-all font-mono text-xs font-semibold text-foreground">
+                    {form.key}
+                  </code>
+                  <Button
+                    size="sm"
+                    className="shrink-0 gap-1.5 shadow-2xs text-xs"
+                    onClick={async () => {
+                      await navigator.clipboard.writeText(form.key);
+                      setCopiedNewKey(true);
+                      toast.success("密钥明文已复制");
+                      setTimeout(() => setCopiedNewKey(false), 2000);
+                    }}
+                  >
+                    {copiedNewKey ? (
+                      <Check className="h-3.5 w-3.5 text-success" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" />
+                    )}
+                    {copiedNewKey ? "已复制" : "复制"}
+                  </Button>
+                </div>
+              </div>
+
+              {/* 安全防泄密/防丢失警示 */}
+              <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-200">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                <span className="leading-relaxed">
+                  <strong>安全提示：</strong>这是您唯一一次查看完整密钥明文的机会。关闭此弹窗后，网关将对其执行脱敏保护，不可再次反查明文。请务必立即复制并保存至您的客户端或密码管理器。
+                </span>
+              </div>
             </div>
           ) : (
             <>
@@ -534,7 +631,7 @@ function KeyDialog({
                 models={form.models}
                 modelChannels={form.modelChannels}
                 channelName={channelName}
-                channelsGlobalOrder={form.channels}
+                selectedChannels={selectedChannels}
                 onModelsChange={(v) => patch({ models: v })}
                 onModelChannelsChange={(v) => patch({ modelChannels: v })}
               />
@@ -552,7 +649,16 @@ function KeyDialog({
         <DialogFooter className="relative shrink-0 items-center gap-2 pt-1">
           <div className="pointer-events-none absolute -top-4 right-0 h-4 w-full bg-gradient-to-t from-background to-transparent" />
           {plaintext ? (
-            <Button onClick={onClose}>我已保存,关闭</Button>
+            <Button
+              className="w-full gap-2 shadow-xs"
+              onClick={async () => {
+                await navigator.clipboard.writeText(form.key);
+                toast.success("已复制并安全退出");
+                onClose();
+              }}
+            >
+              <Check className="h-4 w-4" /> 一键复制密钥并完成
+            </Button>
           ) : (
             <>
               {!valid && (
@@ -586,6 +692,7 @@ function KeyDialog({
 
 export function KeysPage() {
   const { data: keys, isLoading } = useApiKeys();
+  const { data: channels } = useChannels();
   const { data: settings } = useSettings();
   const qc = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -611,11 +718,15 @@ export function KeysPage() {
   const refresh = () => qc.invalidateQueries({ queryKey: ["keys"] });
 
   // 客户端接入地址:监听地址+端口+/v1,复制后贴给任意 OpenAI 兼容客户端即可用
+  const [copiedBase, setCopiedBase] = useState(false);
+  const [copiedKeyId, setCopiedKeyId] = useState<number | null>(null);
   const baseURL = `http://${settings?.listenAddr ?? "127.0.0.1"}:${settings?.port ?? 8787}/v1`;
   const copyBaseURL = async () => {
     try {
       await navigator.clipboard.writeText(baseURL);
+      setCopiedBase(true);
       toast.success("BaseURL 已复制");
+      setTimeout(() => setCopiedBase(false), 1500);
     } catch {
       toast.error("复制失败,请手动复制: " + baseURL);
     }
@@ -631,11 +742,15 @@ export function KeysPage() {
             <button
               onClick={copyBaseURL}
               title="点击复制客户端接入地址"
-              className="inline-flex items-center gap-1.5 rounded-md border bg-muted/40 px-2.5 py-1.5 text-xs transition-colors hover:bg-accent"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border/80 bg-muted/40 px-2.5 py-1.5 text-xs transition-all hover:bg-accent hover:border-border active:scale-95 shadow-2xs"
             >
               <span className="text-muted-foreground">BaseURL</span>
-              <span className="font-mono text-muted-foreground">{baseURL}</span>
-              <Copy className="h-3 w-3" />
+              <span className="font-mono text-foreground font-medium">{baseURL}</span>
+              {copiedBase ? (
+                <Check className="h-3 w-3 text-success" />
+              ) : (
+                <Copy className="h-3 w-3 text-muted-foreground/70" />
+              )}
             </button>
             <Button
               size="sm"
@@ -676,47 +791,115 @@ export function KeysPage() {
               </thead>
               <tbody>
                 {keys.map((k) => (
-                  <tr key={k.id} className="border-b last:border-0">
+                  <tr key={k.id} className="border-b transition-colors duration-150 hover:bg-accent/40 even:bg-muted/15 last:border-0">
                     <td className="py-2.5 pr-3 font-medium">{k.name}</td>
                     <td className="py-2.5 pr-3">
                       <button
-                        className="flex items-center gap-1 font-mono text-xs text-muted-foreground hover:text-foreground"
+                        className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 font-mono text-xs text-muted-foreground transition-all hover:bg-accent hover:text-foreground active:scale-95"
                         title="复制完整密钥"
                         onClick={async () => {
                           try {
                             await navigator.clipboard.writeText(k.key);
+                            setCopiedKeyId(k.id);
                             toast.success("完整密钥已复制");
+                            setTimeout(() => setCopiedKeyId(null), 1500);
                           } catch {
                             toast.error("复制失败,请手动选择复制");
                           }
                         }}
                       >
-                        {maskKey(k.key)}
-                        <Copy className="h-3 w-3" />
+                        <span>{maskKey(k.key)}</span>
+                        {copiedKeyId === k.id ? (
+                          <Check className="h-3 w-3 text-success" />
+                        ) : (
+                          <Copy className="h-3 w-3 text-muted-foreground/60" />
+                        )}
                       </button>
                     </td>
-                    <td className="max-w-[260px] py-2.5 pr-3 text-xs text-muted-foreground">
-                      {k.channels.length === 0
-                        ? "—"
-                        : k.channels
-                            .map((id) => `#${id}`)
-                            .join(" → ")}
-                      {k.models.length > 0 && (
-                        <span
-                          title={k.models.join(", ")}
-                          className="ml-1 inline-block"
-                        >
-                          · {k.models.length} 模型
-                        </span>
-                      )}
-                      {Object.keys(k.modelChannels ?? {}).length > 0 && (
-                        <span title="存在模型级渠道路由定制" className="ml-1">
-                          · <Route className="inline h-3 w-3" />
-                        </span>
+                    <td className="max-w-[260px] py-2.5 pr-3 text-xs">
+                      {k.channels.length === 0 ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        <div className="flex flex-wrap items-center gap-1">
+                          {k.channels.slice(0, 3).map((id, idx) => {
+                            const chName = channels?.find((c) => c.id === id)?.name ?? `#${id}`;
+                            return (
+                              <Fragment key={id}>
+                                {idx > 0 && (
+                                  <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground/40" />
+                                )}
+                                <span
+                                  className="inline-flex items-center rounded-md border border-border/80 bg-muted/60 px-1.5 py-0.5 font-mono text-[11px] text-foreground/80 shadow-2xs"
+                                  title={chName}
+                                >
+                                  #{id}
+                                </span>
+                              </Fragment>
+                            );
+                          })}
+                          {k.channels.length > 3 && (
+                            <span
+                              className="rounded-md border border-border/80 bg-muted/40 px-1 py-0.5 font-mono text-[10px] text-muted-foreground"
+                              title={k.channels
+                                .slice(3)
+                                .map(
+                                  (id) =>
+                                    `#${id} ${channels?.find((c) => c.id === id)?.name ?? ""}`,
+                                )
+                                .join("\n")}
+                            >
+                              +{k.channels.length - 3}
+                            </span>
+                          )}
+                          {k.models.length > 0 && (
+                            <span
+                              title={k.models.join(", ")}
+                              className="ml-1 text-[11px] text-muted-foreground"
+                            >
+                              · {k.models.length} 模型
+                            </span>
+                          )}
+                          {Object.keys(k.modelChannels ?? {}).length > 0 && (
+                            <span title="存在模型级渠道路由定制" className="ml-1 text-primary">
+                              · <Route className="inline h-3 w-3" />
+                            </span>
+                          )}
+                        </div>
                       )}
                     </td>
-                    <td className="py-2.5 pr-3 text-xs text-muted-foreground">
-                      {formatTs(k.lastUsedAt)}
+                    <td className="py-2.5 pr-3 text-xs">
+                      {(() => {
+                        if (!k.lastUsedAt) {
+                          return (
+                            <span className="rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground/70">
+                              从未使用
+                            </span>
+                          );
+                        }
+                        const diffMs = Date.now() - k.lastUsedAt;
+                        const isRecent = diffMs > 0 && diffMs < 15 * 60 * 1000; // 15分钟内
+                        return (
+                          <div
+                            className="inline-flex items-center gap-1.5 font-mono text-xs text-muted-foreground"
+                            title={formatTs(k.lastUsedAt)}
+                          >
+                            {isRecent && (
+                              <span className="relative flex h-2 w-2 shrink-0">
+                                <span className="absolute h-full w-full animate-ping rounded-full bg-emerald-500 opacity-75" />
+                                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                              </span>
+                            )}
+                            <span
+                              className={cn(
+                                isRecent &&
+                                  "font-medium text-emerald-600 dark:text-emerald-400",
+                              )}
+                            >
+                              {formatRelativeTime(k.lastUsedAt)}
+                            </span>
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="py-2.5 pr-3">
                       {k.enabled ? (

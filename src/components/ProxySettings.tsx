@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Loader2, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import type { AppSettings, ProxyEntry } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -107,12 +108,37 @@ function ProxyRow({
         </Button>
       </div>
       {latency.status === "ok" && (
-        <p className="text-xs text-emerald-600 dark:text-emerald-400">
-          连接正常 · 延迟 {latency.ms}ms
-        </p>
+        <div className="flex items-center gap-2 pt-1 text-xs">
+          <span
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 font-mono text-[11px] font-semibold shadow-2xs",
+              (latency.ms ?? 0) < 200
+                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                : (latency.ms ?? 0) < 600
+                  ? "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                  : "border-destructive/30 bg-destructive/10 text-destructive"
+            )}
+          >
+            <span
+              className={cn(
+                "h-1.5 w-1.5 rounded-full",
+                (latency.ms ?? 0) < 200
+                  ? "bg-emerald-500 shadow-[0_0_5px_hsl(var(--success))]"
+                  : (latency.ms ?? 0) < 600
+                    ? "bg-amber-500"
+                    : "bg-destructive"
+              )}
+            />
+            {latency.ms}ms
+          </span>
+          <span className="text-[11px] text-muted-foreground">代理链路握手通畅</span>
+        </div>
       )}
       {latency.status === "fail" && (
-        <p className="text-xs text-destructive">{latency.error}</p>
+        <div className="flex items-center gap-1.5 pt-1 text-[11px] text-destructive">
+          <span className="h-1.5 w-1.5 rounded-full bg-destructive shrink-0" />
+          <span className="truncate">{latency.error}</span>
+        </div>
       )}
     </div>
   );

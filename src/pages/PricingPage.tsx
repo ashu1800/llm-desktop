@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Coins, History, Pencil, Plus, Trash2, Wand2, X } from "lucide-react";
+import { Coins, History, Pencil, Plus, Search, Sparkles, Trash2, Wand2, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { usePrices, useUnpricedModels } from "@/hooks/use-gateway";
 import type { PriceEntry } from "@/lib/types";
@@ -12,7 +12,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -249,6 +248,14 @@ export function PricingPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<PriceEntry | null>(null);
   const [quick, setQuick] = useState(false);
+  const [search, setSearch] = useState("");
+
+  const filteredPrices = useMemo(() => {
+    if (!prices) return [];
+    if (!search.trim()) return prices;
+    const q = search.trim().toLowerCase();
+    return prices.filter((p) => p.pattern.toLowerCase().includes(q));
+  }, [prices, search]);
 
   const openNew = () => {
     setEditing(null);
@@ -289,16 +296,23 @@ export function PricingPage() {
   return (
     <div className="space-y-4">
       {unpricedCount > 0 && (
-        <Card>
-          <CardHeader className="flex-row items-center justify-between space-y-0 pb-4">
-            <div>
-              <CardTitle className="flex items-center gap-2 text-base">
-                未定价模型
-                <Badge variant="warning">{unpricedCount}</Badge>
-              </CardTitle>
-              <CardDescription>
-                以下模型已有成功请求但定价表未覆盖,费用未计入;补录后自动回填
-              </CardDescription>
+        <Card className="border border-amber-500/35 bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent shadow-xs">
+          <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-500/15 text-amber-600 ring-1 ring-inset ring-amber-500/30 dark:text-amber-400">
+                <Coins className="h-5 w-5" />
+              </div>
+              <div>
+                <CardTitle className="flex items-center gap-2 text-base text-amber-950 dark:text-amber-100">
+                  发现未定价模型
+                  <span className="rounded-full border border-amber-500/30 bg-amber-500/20 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-300">
+                    {unpricedCount}
+                  </span>
+                </CardTitle>
+                <CardDescription className="text-amber-800/80 dark:text-amber-200/70">
+                  以下模型已有成功请求但定价表未覆盖，费用暂未计入；补录后自动回填历史费用
+                </CardDescription>
+              </div>
             </div>
           </CardHeader>
           <CardContent>
@@ -312,19 +326,20 @@ export function PricingPage() {
               </thead>
               <tbody>
                 {unpriced!.map((u) => (
-                  <tr key={u.model} className="border-b last:border-0">
+                  <tr key={u.model} className="border-b transition-colors duration-150 hover:bg-accent/40 even:bg-muted/15 last:border-0">
                     <td className="py-2.5 pr-3 font-mono text-xs">{u.model}</td>
                     <td className="py-2.5 pr-3 text-xs text-muted-foreground">
                       {formatTs(u.firstSeen)}
                     </td>
                     <td className="py-2.5">
-                      <div className="flex items-center gap-0.5">
+                      <div className="flex items-center gap-1">
                         <Button
-                          variant="ghost"
+                          variant="outline"
                           size="sm"
+                          className="border-amber-500/30 bg-background/80 hover:bg-amber-500/15 hover:text-amber-700 dark:hover:text-amber-300 gap-1.5 shadow-2xs text-xs"
                           onClick={() => openQuick(u.model)}
                         >
-                          <Wand2 className="h-3.5 w-3.5" /> 补录
+                          <Wand2 className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" /> 补录
                         </Button>
                         <Button
                           variant="ghost"
@@ -346,8 +361,34 @@ export function PricingPage() {
 
       <Card>
         <CardHeader className="flex-row items-center justify-between space-y-0 pb-4">
-          <CardTitle className="text-base">模型定价</CardTitle>
-          <div className="flex items-center gap-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <span>模型定价</span>
+            <span className="font-mono text-xs font-normal text-muted-foreground">
+              ({filteredPrices.length}
+              {prices && filteredPrices.length !== prices.length
+                ? ` / ${prices.length}`
+                : ""}
+              )
+            </span>
+          </CardTitle>
+          <div className="flex items-center gap-2.5">
+            <div className="relative w-40 sm:w-52">
+              <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground/70" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="搜索模型规则…"
+                className="h-8 bg-background/60 pl-8 pr-7 text-xs shadow-2xs"
+              />
+              {search && (
+                <button
+                  onClick={() => setSearch("")}
+                  className="absolute right-2 top-2 text-muted-foreground/60 hover:text-foreground"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
             <Button
               size="sm"
               variant="outline"
@@ -373,6 +414,10 @@ export function PricingPage() {
                 定价表为空,费用暂不计入;新增条目后可一键回填历史费用
               </p>
             </div>
+          ) : !filteredPrices.length ? (
+            <div className="py-10 text-center text-sm text-muted-foreground">
+              未找到匹配「{search}」的定价规则
+            </div>
           ) : (
             <table className="w-full table-fixed text-sm">
               <thead>
@@ -389,19 +434,20 @@ export function PricingPage() {
                 </tr>
               </thead>
               <tbody>
-                {prices.map((p) => (
-                  <tr key={p.pattern} className="border-b last:border-0">
+                {filteredPrices.map((p) => (
+                  <tr key={p.pattern} className="border-b transition-colors duration-150 hover:bg-accent/40 even:bg-muted/15 last:border-0">
                     <td className="py-2.5 pr-3 font-mono text-xs">
-                      {p.pattern}
+                      <span className="font-semibold text-foreground">{p.pattern}</span>
                       {p.pattern.endsWith("*") && (
-                        <Badge variant="secondary" className="ml-2 px-1.5">
+                        <span className="ml-2 inline-flex items-center gap-0.5 rounded-full border border-amber-500/35 bg-amber-500/15 px-2 py-0.5 font-sans text-[10px] font-semibold text-amber-700 shadow-2xs dark:text-amber-300">
+                          <Sparkles className="h-2.5 w-2.5 text-amber-500" />
                           通配
-                        </Badge>
+                        </span>
                       )}
                       {p.inputUsd != null && (
-                        <Badge variant="secondary" className="ml-2 px-1.5">
-                          $
-                        </Badge>
+                        <span className="ml-1.5 inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[10px] font-bold text-emerald-600 shadow-2xs dark:text-emerald-400">
+                          USD
+                        </span>
                       )}
                     </td>
                     <td className="py-2.5 pr-3 text-right font-mono text-xs">

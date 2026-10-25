@@ -6,10 +6,10 @@ import {
   KeyRound,
   LayoutDashboard,
   Settings,
-  Waypoints,
   type LucideIcon,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { BrandLogo } from "@/components/BrandLogo";
 import { cn } from "@/lib/utils";
 import type { PageKey } from "@/lib/types";
 
@@ -46,30 +46,46 @@ export function Sidebar({
   version,
 }: SidebarProps) {
   return (
-    <aside className="flex w-[161px] shrink-0 flex-col border-r bg-muted">
-      {/* 品牌区:自绘标题栏后应用名在顶栏展示,此处只保留图标+副标题避免重复 */}
-      <div className="flex h-14 items-center gap-2.5 border-b px-4">
-        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
-          <Waypoints className="h-4 w-4" />
-        </div>
-        <div className="leading-tight">
-          <div className="text-[11px] text-muted-foreground">本地 API 网关</div>
+    <aside className="flex w-[168px] shrink-0 flex-col border-r bg-muted/90 backdrop-blur-sm">
+      {/* 品牌区: 嵌入 Gateway G 品牌专属微标与主副标题 */}
+      <div className="flex h-14 items-center gap-2.5 border-b px-3.5">
+        <BrandLogo className="h-7 w-7 drop-shadow-xs" />
+        <div className="min-w-0 leading-tight">
+          <div className="truncate text-xs font-semibold tracking-tight text-foreground">
+            LLM Gateway
+          </div>
+          <div className="text-[10px] text-muted-foreground/80">本地 API 网关</div>
         </div>
       </div>
-      <nav className="flex-1 space-y-1 p-3">
-        {NAV_ITEMS.map(({ key, label, icon: Icon }) => (
+      <nav className="flex-1 space-y-1 p-2.5">
+        {NAV_ITEMS.map(({ key, label, icon: Icon }, idx) => (
           <button
             key={key}
             onClick={() => onNavigate(key)}
             className={cn(
-              "flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors",
+              "group relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-all duration-150 active:scale-[0.98]",
               page === key
-                ? "bg-accent font-medium text-accent-foreground"
-                : "text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground"
+                ? "bg-accent/90 font-medium text-foreground shadow-xs"
+                : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
             )}
+            title={`快捷键: Ctrl+${idx + 1}`}
           >
-            <Icon className="h-4 w-4 shrink-0" />
+            {/* 激活状态左侧陶土橘垂直指示胶囊 */}
+            {page === key && (
+              <span className="absolute left-0.5 h-4 w-1 rounded-full bg-primary" />
+            )}
+            <Icon
+              className={cn(
+                "h-4 w-4 shrink-0 transition-colors",
+                page === key
+                  ? "text-primary"
+                  : "text-muted-foreground group-hover:text-foreground"
+              )}
+            />
             <span className="flex-1 text-left">{label}</span>
+            <kbd className="opacity-0 group-hover:opacity-100 transition-opacity rounded border border-border/60 bg-muted/60 px-1 font-mono text-[10px] text-muted-foreground/80 shadow-2xs">
+              {idx + 1}
+            </kbd>
           </button>
         ))}
       </nav>
@@ -83,7 +99,7 @@ export function Sidebar({
           }
         >
           <Github className="h-3.5 w-3.5" />
-          <span>{version ? `v${version}` : ""}</span>
+          <span className="font-mono text-[11px]">{version ? `v${version}` : ""}</span>
         </button>
         {updateAvailable && (
           <button

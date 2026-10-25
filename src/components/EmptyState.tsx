@@ -17,16 +17,16 @@ export function EmptyState({
   return (
     <div
       className={cn(
-        "flex h-full min-h-[320px] flex-col items-center justify-center gap-3 rounded-xl border border-dashed bg-muted/20 p-10 text-center",
+        "flex h-full min-h-[320px] flex-col items-center justify-center gap-3.5 rounded-2xl border border-dashed border-border/80 bg-muted/15 p-10 text-center transition-colors",
         className
       )}
     >
-      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-        <Icon className="h-6 w-6 text-muted-foreground" />
+      <div className="relative flex h-14 w-14 items-center justify-center rounded-2xl bg-muted/60 shadow-xs ring-1 ring-border/80">
+        <Icon className="h-7 w-7 text-muted-foreground/75" />
       </div>
       <div className="space-y-1">
-        <p className="font-medium">{title}</p>
-        <p className="max-w-md text-sm text-muted-foreground">{description}</p>
+        <p className="text-sm font-semibold tracking-tight text-foreground">{title}</p>
+        <p className="max-w-md text-xs leading-relaxed text-muted-foreground">{description}</p>
       </div>
     </div>
   );

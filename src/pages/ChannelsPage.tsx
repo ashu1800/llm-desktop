@@ -2,7 +2,10 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
+  AlertTriangle,
   Cable,
+  Check,
+  Copy,
   Eye,
   EyeOff,
   ImagePlus,
@@ -28,6 +31,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { ProtocolBadge } from "@/components/ProtocolBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -84,14 +88,36 @@ function breakerBadge(
   enabled: boolean,
   breaker?: { state: string; remainingSecs: number },
 ) {
-  if (!enabled) return <Badge variant="muted">已禁用</Badge>;
+  if (!enabled)
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/60 px-2.5 py-0.5 text-xs font-medium text-muted-foreground shadow-2xs">
+        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/50" />
+        已禁用
+      </span>
+    );
   if (!breaker || breaker.state === "closed")
-    return <Badge variant="success">正常</Badge>;
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-success/30 bg-success/10 px-2.5 py-0.5 text-xs font-semibold text-success shadow-2xs">
+        <span className="h-1.5 w-1.5 rounded-full bg-success shadow-[0_0_6px_hsl(var(--success))]" />
+        正常
+      </span>
+    );
   if (breaker.state === "open")
     return (
-      <Badge variant="destructive">熔断中 {breaker.remainingSecs}s</Badge>
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-destructive/30 bg-destructive/10 px-2.5 py-0.5 text-xs font-semibold text-destructive shadow-2xs">
+        <span className="relative flex h-2 w-2 items-center justify-center">
+          <span className="absolute h-full w-full animate-ping rounded-full bg-destructive/50" />
+          <span className="h-1.5 w-1.5 rounded-full bg-destructive" />
+        </span>
+        <span className="tabular-nums">熔断冷却 {breaker.remainingSecs}s</span>
+      </span>
     );
-  return <Badge variant="warning">冷却探测中</Badge>;
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-warning/35 bg-warning/10 px-2.5 py-0.5 text-xs font-semibold text-warning shadow-2xs">
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-warning" />
+      半开探测中
+    </span>
+  );
 }
 
 // ---------- 计费倍率规则编辑器 ----------
@@ -567,8 +593,8 @@ function ChannelDialog({
           <DialogTitle>{form.id === 0 ? "新建渠道" : "编辑渠道"}</DialogTitle>
         </DialogHeader>
         <div className="-mr-2 grid min-h-0 flex-1 gap-4 overflow-y-auto pr-2">
-          {/* 名称 + 协议 + 币种一行:名称自适应占宽,两个下拉按内容收窄 */}
-          <div className="grid grid-cols-[minmax(0,1fr)_150px_120px] items-end gap-4">
+          {/* 第一行: 名称 + 计费币种 */}
+          <div className="grid grid-cols-[minmax(0,1fr)_130px] items-end gap-4">
             <div className="space-y-1.5">
               <Label>名称</Label>
               <div className="flex items-center gap-2">
@@ -612,22 +638,6 @@ function ChannelDialog({
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label>协议类型</Label>
-              <Select
-                value={form.protocol}
-                onValueChange={(v) => patch({ protocol: v as UpstreamProto })}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="openai">OpenAI 兼容</SelectItem>
-                  <SelectItem value="anthropic">Anthropic 原生</SelectItem>
-                  <SelectItem value="gemini">Gemini 原生</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
               {/* 计费币种:该渠道的请求按哪套价格记账(usd 模型未配美元价时回退人民币) */}
               <Label>计费币种</Label>
               <Select
@@ -642,6 +652,64 @@ function ChannelDialog({
                   <SelectItem value="usd">美元 $</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+          </div>
+
+          {/* 第二行: 协议类型独立整行展示 */}
+          <div className="space-y-2">
+            <Label className="text-xs font-medium">协议类型</Label>
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                {
+                  key: "openai" as UpstreamProto,
+                  name: "OpenAI 兼容",
+                  desc: "/v1/chat/completions",
+                  dot: "bg-emerald-500",
+                  activeRing: "border-emerald-500/50 ring-2 ring-emerald-500/20 bg-emerald-500/5",
+                },
+                {
+                  key: "anthropic" as UpstreamProto,
+                  name: "Anthropic 原生",
+                  desc: "/v1/messages",
+                  dot: "bg-primary",
+                  activeRing: "border-primary/50 ring-2 ring-primary/20 bg-primary/5",
+                },
+                {
+                  key: "gemini" as UpstreamProto,
+                  name: "Gemini 原生",
+                  desc: "/v1beta/models",
+                  dot: "bg-indigo-500",
+                  activeRing: "border-indigo-500/50 ring-2 ring-indigo-500/20 bg-indigo-500/5",
+                },
+              ].map((item) => {
+                const active = form.protocol === item.key;
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => patch({ protocol: item.key })}
+                    className={cn(
+                      "flex flex-col items-start rounded-xl border p-3 text-left transition-all duration-150 select-none shadow-2xs",
+                      active
+                        ? item.activeRing
+                        : "border-border/80 bg-background/60 hover:bg-muted/40",
+                    )}
+                  >
+                    <div className="flex w-full items-center justify-between">
+                      <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                        <span className={cn("h-2 w-2 rounded-full", item.dot)} />
+                        {item.name}
+                      </span>
+                      {active && (
+                        <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+                      )}
+                    </div>
+                    <span className="mt-1 font-mono text-[10px] text-muted-foreground/80">
+                      {item.desc}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
           <div className="space-y-1.5">
@@ -943,44 +1011,64 @@ function TestChannelDialog({
           </div>
         </div>
 
-        {result && (
-          <div className="min-h-0 flex-1 overflow-auto rounded-md border bg-muted/20 p-2.5">
+        {mutation.isPending && (
+          <div className="flex flex-col items-center justify-center gap-2.5 py-6 text-center text-xs text-muted-foreground">
+            <div className="relative flex h-10 w-10 items-center justify-center">
+              <span className="absolute h-10 w-10 animate-ping rounded-full bg-primary/20" />
+              <Loader2 className="h-5 w-5 animate-spin text-primary" />
+            </div>
+            <span>正在向上游发送探测并等待握手…</span>
+          </div>
+        )}
+
+        {result && !mutation.isPending && (
+          <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-border/80 bg-muted/15 p-3.5 shadow-2xs">
             {result.ok ? (
-              <div className="space-y-1.5 text-xs">
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                  <span className="font-medium text-emerald-600 dark:text-emerald-400">
-                    ✓ 测试成功
+              <div className="space-y-3 text-xs">
+                {/* 性能指标胶囊阵列 */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                    测试成功
                   </span>
-                  <span className="text-muted-foreground">
-                    首字 <span className="font-mono">{result.ttftMs}ms</span>
+                  <span className="inline-flex items-center gap-1.5 rounded-md border bg-background/80 px-2 py-0.5 text-muted-foreground shadow-2xs">
+                    首字 <span className="font-mono font-medium text-foreground">{result.ttftMs}ms</span>
                   </span>
-                  <span className="text-muted-foreground">
-                    总耗时 <span className="font-mono">{result.latencyMs}ms</span>
+                  <span className="inline-flex items-center gap-1.5 rounded-md border bg-background/80 px-2 py-0.5 text-muted-foreground shadow-2xs">
+                    总耗时 <span className="font-mono font-medium text-foreground">{result.latencyMs}ms</span>
                   </span>
                   {result.completionTokens != null && (
-                    <span className="text-muted-foreground">
-                      输出{" "}
-                      <span className="font-mono">
-                        {result.completionTokens} tok
-                      </span>
+                    <span className="inline-flex items-center gap-1.5 rounded-md border bg-background/80 px-2 py-0.5 text-muted-foreground shadow-2xs">
+                      输出 <span className="font-mono font-medium text-foreground">{result.completionTokens} tok</span>
                     </span>
                   )}
                   {result.model && (
-                    <span className="font-mono text-muted-foreground">
+                    <span className="rounded-md border bg-muted/60 px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
                       {result.model}
                     </span>
                   )}
                 </div>
+
+                {/* 终端回复气泡 */}
                 {result.reply && (
-                  <div className="whitespace-pre-wrap break-words rounded-md border bg-background px-2.5 py-1.5 font-mono leading-5">
-                    {result.reply}
+                  <div className="relative rounded-xl border border-border/80 bg-background/90 p-3 shadow-2xs">
+                    <div className="mb-2 flex items-center justify-between border-b border-border/40 pb-1.5 text-[11px] text-muted-foreground">
+                      <span className="flex items-center gap-1.5 font-medium text-foreground/80">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                        模型实时回复
+                      </span>
+                    </div>
+                    <div className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-foreground/90">
+                      {result.reply}
+                    </div>
                   </div>
                 )}
               </div>
             ) : (
-              <span className="text-xs text-destructive">
-                ✗ {result.message}
-              </span>
+              <div className="flex items-start gap-2.5 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span className="break-words font-medium">{result.message}</span>
+              </div>
             )}
           </div>
         )}
@@ -1014,26 +1102,88 @@ export function ChannelsPage() {
   const [editing, setEditing] = useState<Channel | null>(null);
   // 连通性测试弹窗:目标渠道(null = 关闭)
   const [testTarget, setTestTarget] = useState<Channel | null>(null);
+  const [copiedUrlId, setCopiedUrlId] = useState<number | null>(null);
+  const [batchTesting, setBatchTesting] = useState(false);
 
   const breakerOf = (id: number) =>
     breakers?.find((b) => b.channelId === id);
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["channels"] });
 
+  const runBatchTest = async () => {
+    const targets = (channels ?? []).filter((c) => c.enabled);
+    if (targets.length === 0) {
+      toast.info("暂无启用的渠道可供测试");
+      return;
+    }
+    setBatchTesting(true);
+    toast.info(`开始并行测试 ${targets.length} 个渠道…`);
+    try {
+      const results = await Promise.allSettled(
+        targets.map((c) => api.testChannel(c.id, "hi", c.models[0] || undefined)),
+      );
+      let okCount = 0;
+      let failCount = 0;
+      results.forEach((r) => {
+        if (r.status === "fulfilled" && r.value.ok) {
+          okCount++;
+        } else {
+          failCount++;
+        }
+      });
+      refresh();
+      qc.invalidateQueries({ queryKey: ["breakers"] });
+      if (failCount === 0) {
+        toast.success(`全测完成：全部 ${okCount} 个渠道握手成功`);
+      } else {
+        toast.warning(`全测完成：${okCount} 个成功，${failCount} 个失败`);
+      }
+    } catch (e) {
+      toast.error(`批量测试异常: ${e}`);
+    } finally {
+      setBatchTesting(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <Card>
         <CardHeader className="flex-row items-center justify-between space-y-0 pb-4">
-          <CardTitle className="text-base">渠道管理</CardTitle>
-          <Button
-            size="sm"
-            onClick={() => {
-              setEditing(emptyChannel());
-              setDialogOpen(true);
-            }}
-          >
-            <Plus className="h-4 w-4" /> 新建渠道
-          </Button>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <span>渠道管理</span>
+            <span className="font-mono text-xs font-normal text-muted-foreground">
+              ({channels?.length ?? 0} 个渠道)
+            </span>
+          </CardTitle>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={batchTesting || !channels?.some((c) => c.enabled)}
+              onClick={runBatchTest}
+              className="gap-1.5 text-xs shadow-2xs"
+            >
+              <Zap
+                className={cn(
+                  "h-3.5 w-3.5",
+                  batchTesting
+                    ? "animate-spin text-amber-500"
+                    : "text-amber-500",
+                )}
+              />
+              {batchTesting ? "正在探测…" : "测试全部渠道"}
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                setEditing(emptyChannel());
+                setDialogOpen(true);
+              }}
+              className="gap-1.5 shadow-2xs"
+            >
+              <Plus className="h-4 w-4" /> 新建渠道
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -1063,7 +1213,7 @@ export function ChannelsPage() {
               <tbody>
                 {channels.map((ch) => (
                   <Fragment key={ch.id}>
-                    <tr className="border-b last:border-0">
+                    <tr className="border-b transition-colors duration-150 hover:bg-accent/40 even:bg-muted/15 last:border-0">
                     <td className="py-2.5 pr-3 font-medium">
                       <span className="inline-flex items-center gap-2">
                         {ch.icon && (
@@ -1077,15 +1227,41 @@ export function ChannelsPage() {
                       </span>
                     </td>
                     <td className="py-2.5 pr-3">
-                      <Badge variant="secondary">{ch.protocol}</Badge>
-                      {ch.priceCurrency === "usd" && (
-                        <Badge variant="secondary" className="px-1.5" title="该渠道按美元价格计费">
-                          $
-                        </Badge>
-                      )}
+                      <div className="flex items-center gap-1.5">
+                        <ProtocolBadge protocol={ch.protocol} />
+                        {ch.priceCurrency === "usd" && (
+                          <Badge variant="secondary" className="px-1.5 text-[10px] font-mono" title="该渠道按美元价格计费">
+                            $
+                          </Badge>
+                        )}
+                      </div>
                     </td>
-                    <td className="max-w-[220px] truncate py-2.5 pr-3 font-mono text-xs text-muted-foreground">
-                      {ch.baseUrl}
+                    <td className="max-w-[220px] py-2.5 pr-3 font-mono text-xs">
+                      <div className="group/url flex items-center justify-between gap-1.5">
+                        <span className="truncate text-muted-foreground" title={ch.baseUrl}>
+                          {ch.baseUrl}
+                        </span>
+                        <button
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText(ch.baseUrl);
+                              setCopiedUrlId(ch.id);
+                              toast.success("BaseURL 已复制");
+                              setTimeout(() => setCopiedUrlId(null), 1500);
+                            } catch {
+                              toast.error("复制失败");
+                            }
+                          }}
+                          className="rounded p-0.5 text-muted-foreground/50 opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover/url:opacity-100"
+                          title="复制 BaseURL"
+                        >
+                          {copiedUrlId === ch.id ? (
+                            <Check className="h-3 w-3 text-success" />
+                          ) : (
+                            <Copy className="h-3 w-3" />
+                          )}
+                        </button>
+                      </div>
                     </td>
                     <td className="py-2.5 pr-3 text-xs text-muted-foreground">
                       {ch.apiKeys.length} 个
@@ -1095,13 +1271,31 @@ export function ChannelsPage() {
                         </span>
                       )}
                     </td>
-                    <td className="py-2.5 pr-3 text-xs text-muted-foreground">
-                      {ch.models.length === 0
-                        ? "不限"
-                        : `${ch.models.length} 个`}
-                      {Object.keys(ch.modelMap).length > 0 && (
-                        <span> · 映射 {Object.keys(ch.modelMap).length}</span>
-                      )}
+                    <td className="py-2.5 pr-3 text-xs">
+                      <div className="flex flex-wrap items-center gap-1">
+                        {ch.models.length === 0 ? (
+                          <span className="inline-flex items-center rounded-md border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+                            不限模型
+                          </span>
+                        ) : (
+                          <span
+                            className="inline-flex items-center rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-primary shadow-2xs"
+                            title={ch.models.join("\n")}
+                          >
+                            {ch.models.length} 个模型
+                          </span>
+                        )}
+                        {Object.keys(ch.modelMap).length > 0 && (
+                          <span
+                            className="inline-flex items-center rounded-md border border-indigo-500/30 bg-indigo-500/10 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-indigo-600 shadow-2xs dark:text-indigo-400"
+                            title={Object.entries(ch.modelMap)
+                              .map(([from, to]) => `${from} → ${to}`)
+                              .join("\n")}
+                          >
+                            映射 {Object.keys(ch.modelMap).length}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="py-2.5 pr-3">
                       {breakerBadge(ch.enabled, breakerOf(ch.id))}
@@ -1112,6 +1306,7 @@ export function ChannelsPage() {
                           variant="ghost"
                           size="icon"
                           title="测试连通性"
+                          className="h-8 w-8 text-muted-foreground transition-colors hover:bg-amber-500/15 hover:text-amber-600 dark:hover:text-amber-400"
                           onClick={() => setTestTarget(ch)}
                         >
                           <Zap className="h-3.5 w-3.5" />
@@ -1120,6 +1315,12 @@ export function ChannelsPage() {
                           variant="ghost"
                           size="icon"
                           title={ch.enabled ? "停用" : "启用"}
+                          className={cn(
+                            "h-8 w-8 transition-colors",
+                            ch.enabled
+                              ? "text-muted-foreground hover:bg-muted hover:text-foreground"
+                              : "text-muted-foreground/60 hover:bg-emerald-500/15 hover:text-emerald-600 dark:hover:text-emerald-400"
+                          )}
                           onClick={async () => {
                             try {
                               await api.setChannelEnabled(ch.id, !ch.enabled);
@@ -1135,6 +1336,7 @@ export function ChannelsPage() {
                           variant="ghost"
                           size="icon"
                           title="手动恢复熔断"
+                          className="h-8 w-8 text-muted-foreground transition-colors hover:bg-sky-500/15 hover:text-sky-600 dark:hover:text-sky-400"
                           onClick={async () => {
                             try {
                               await api.recoverChannel(ch.id);
@@ -1150,6 +1352,7 @@ export function ChannelsPage() {
                           variant="ghost"
                           size="icon"
                           title="编辑"
+                          className="h-8 w-8 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                           onClick={() => {
                             setEditing(structuredClone(ch));
                             setDialogOpen(true);
@@ -1161,6 +1364,7 @@ export function ChannelsPage() {
                           variant="ghost"
                           size="icon"
                           title="删除"
+                          className="h-8 w-8 text-muted-foreground transition-colors hover:bg-destructive/15 hover:text-destructive"
                           onClick={async () => {
                             // 删除渠道连带其配置,不可恢复:二次确认
                             if (

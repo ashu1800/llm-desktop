@@ -2,6 +2,7 @@
 // 更新内容从 GitHub Releases API 拉取(公开仓库免认证);失败时回退展示最新版说明。
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
+import { BrandLogo } from "@/components/BrandLogo";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -174,37 +175,60 @@ export function UpdateDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle className="flex items-baseline gap-2.5">
-            <span>更新到 v{state.nextVersion ?? "?"}</span>
-            <span className="text-xs font-normal text-muted-foreground">
-              自 v{state.currentVersion ?? "?"} 以来的更新内容
-            </span>
-          </DialogTitle>
+        <DialogHeader className="gap-3 pb-3 border-b border-border/60">
+          <div className="flex items-center gap-3">
+            <BrandLogo className="h-10 w-10 shrink-0 drop-shadow-xs" />
+            <div>
+              <DialogTitle className="flex items-center gap-2 text-base font-bold tracking-tight">
+                <span>发现新版本</span>
+                <span className="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-0.5 font-mono text-xs font-semibold text-primary">
+                  v{state.currentVersion ?? "0.0.0"} → v{state.nextVersion ?? "?"}
+                </span>
+              </DialogTitle>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                获取最新功能、协议兼容性修复与稳定性改进
+              </p>
+            </div>
+          </div>
         </DialogHeader>
 
-        <div className="max-h-[55vh] space-y-5 overflow-y-auto pr-1">
+        {state.phase === "downloading" && (
+          <div className="space-y-1.5 py-1">
+            <div className="flex justify-between text-xs font-medium">
+              <span className="text-muted-foreground">正在下载并校验签名…</span>
+              <span className="font-mono text-primary font-semibold">{pct != null ? `${pct}%` : ""}</span>
+            </div>
+            <div className="h-2 w-full overflow-hidden rounded-full bg-muted/80 p-0.5">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-primary via-orange-400 to-primary transition-all duration-300 shadow-xs"
+                style={{ width: `${pct ?? 100}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="max-h-[50vh] space-y-4 overflow-y-auto pr-1">
           {entries === null && !loadError ? (
-            <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> 获取更新内容…
+            <div className="flex h-36 items-center justify-center text-sm text-muted-foreground">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> 获取更新说明…
             </div>
           ) : entries !== null && entries.length > 0 ? (
             entries.map((e) => <EntryBlock key={e.version} entry={e} />)
           ) : (
             // GitHub API 失败或无分版本条目:回退展示最新版说明
-            <div>
-              <div className="font-semibold">v{state.nextVersion ?? ""}</div>
-              <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
+            <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
+              <div className="font-semibold text-sm">v{state.nextVersion ?? ""}</div>
+              <p className="mt-1.5 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground font-mono">
                 {state.notes ?? "暂无更新说明。"}
               </p>
             </div>
           )}
         </div>
 
-        <DialogFooter className="items-center gap-2">
+        <DialogFooter className="items-center gap-2 pt-2 border-t border-border/40">
           {state.phase === "downloading" && (
             <span className="mr-auto text-xs text-muted-foreground">
-              正在校验签名并安装,完成后请重启
+              安装完成后将提示重启应用生效
             </span>
           )}
           <Button variant="ghost" onClick={() => onOpenChange(false)}>

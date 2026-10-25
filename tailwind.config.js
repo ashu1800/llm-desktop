@@ -6,6 +6,20 @@ export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
+      /* v4 风格的更轻阴影梯度:v3 没有 *-2xs/-xs,UI 大量使用,补齐等价定义 */
+      boxShadow: {
+        '2xs': '0 1px 1px 0 rgb(0 0 0 / 0.05)',
+        xs: '0 1px 2px 0 rgb(0 0 0 / 0.05)',
+      },
+      dropShadow: {
+        xs: '0 1px 1px rgb(0 0 0 / 0.05)',
+      },
+      blur: {
+        xs: '2px',
+      },
+      backdropBlur: {
+        xs: '2px',
+      },
       fontFamily: {
         // Claude 风:Figtree 覆盖拉丁/数字,中文回退系统雅黑
         sans: [
