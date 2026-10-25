@@ -95,6 +95,8 @@ async fn add_key(env: &TestEnv, channels: &[i64]) -> String {
         key: store::api_keys::generate_key(),
         enabled: true,
         channels: channels.to_vec(),
+        models: Vec::new(),
+        model_channels: Default::default(),
         remark: String::new(),
         created_at: 0,
         last_used_at: None,
@@ -243,6 +245,110 @@ async fn upstream_key_rotation_on_401() {
         env.state.breakers.status(c1).state,
         llm_desktop_lib::breaker::State::Closed
     );
+}
+
+/// 模型级渠道路由:同一密钥勾选 A、B 两渠道,modelChannels 把该模型定向到
+/// B 优先;命中标记(x-gw-channel)应先 B 后 A,而非全局顺序 A→B
+#[tokio::test]
+async fn model_level_channel_order_overrides_global() {
+    let env = make_state().await;
+    let a = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ok_json())
+        .mount(&a)
+        .await;
+    let b = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ok_json())
+        .mount(&b)
+        .await;
+
+    // 全局顺序 [A, B];渠道名即 x-gw-channel 标记
+    let ca = add_channel(&env, "A渠道", &a.uri(), &["sk-up"]).await;
+    let cb = add_channel(&env, "B渠道", &b.uri(), &["sk-up"]).await;
+
+    // 白名单 [gpt-test];gpt-test 的模型级顺序 = [B, A]
+    let key = ApiKey {
+        id: 0,
+        name: "routed".into(),
+        key: store::api_keys::generate_key(),
+        enabled: true,
+        channels: vec![ca, cb],
+        models: vec!["gpt-test".into()],
+        model_channels: [("gpt-test".into(), vec![cb, ca])]
+            .into_iter()
+            .collect(),
+        remark: String::new(),
+        created_at: 0,
+        last_used_at: None,
+    };
+    let plain = key.key.clone();
+    store::api_keys::insert(&env.state.db, &key).await.unwrap();
+    env.state.reload_keys().await.unwrap();
+
+    let resp = call(&env, &plain, &non_stream_body()).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let chan = llm_desktop_lib::util::header_decode(
+        resp.headers().get("x-gw-channel").unwrap().to_str().unwrap(),
+    );
+    // 模型级顺序生效:优先 B(全局顺序里 A 在前,若排序失效会先打 A)
+    assert_eq!(chan, "B渠道");
+    // A 未被请求(若顺序失效 A 会先收到请求)
+    assert_eq!(a.received_requests().await.unwrap_or_default().len(), 0);
+    assert_eq!(b.received_requests().await.unwrap_or_default().len(), 1);
+}
+
+/// 密钥模型白名单:模型不在列 → 404;空白名单(旧数据)→ 放行不限模型
+#[tokio::test]
+async fn key_model_whitelist_gates_requests() {
+    let env = make_state().await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ok_json())
+        .mount(&server)
+        .await;
+    let c1 = add_channel(&env, "渠道", &server.uri(), &["sk-up"]).await;
+
+    // 白名单不含 gpt-test → 404
+    let key = ApiKey {
+        id: 0,
+        name: "wl".into(),
+        key: store::api_keys::generate_key(),
+        enabled: true,
+        channels: vec![c1],
+        models: vec!["other-model".into()],
+        model_channels: Default::default(),
+        remark: String::new(),
+        created_at: 0,
+        last_used_at: None,
+    };
+    let plain = key.key.clone();
+    store::api_keys::insert(&env.state.db, &key).await.unwrap();
+    env.state.reload_keys().await.unwrap();
+    let resp = call(&env, &plain, &non_stream_body()).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // 空白名单(升级前存量密钥)→ 兼容放行
+    let legacy = ApiKey {
+        id: 0,
+        name: "legacy".into(),
+        key: store::api_keys::generate_key(),
+        enabled: true,
+        channels: vec![c1],
+        models: Vec::new(),
+        model_channels: Default::default(),
+        remark: String::new(),
+        created_at: 0,
+        last_used_at: None,
+    };
+    let legacy_plain = legacy.key.clone();
+    store::api_keys::insert(&env.state.db, &legacy).await.unwrap();
+    env.state.reload_keys().await.unwrap();
+    let resp = call(&env, &legacy_plain, &non_stream_body()).await;
+    assert_eq!(resp.status(), StatusCode::OK);
 }
 
 #[tokio::test]

@@ -1,5 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  currentMonitor,
+  getCurrentWindow,
+  LogicalSize,
+} from "@tauri-apps/api/window";
 import {
   AlertTriangle,
   ArrowDown,
@@ -78,6 +83,242 @@ import { cn } from "@/lib/utils";
 const PAGE_SIZE = 50;
 // 时间分段(无"全部":总览默认今天起)
 const DASH_RANGES: TimeRange[] = ["today", "3d", "7d", "30d"];
+// 纵向滚动条宽度(与 index.css 的 ::-webkit-scrollbar width 一致)
+const SCROLLBAR_WIDTH = 10;
+// 窗口最小宽度的下限:窗口配置里 minWidth 的初始值,实测值只在其上抬高
+const BASELINE_MIN_WIDTH = 1000;
+// setMinSize 需要同时给高度:与 tauri.conf.json 的 minHeight 保持一致,
+// 传 0 会把配置的最小高度覆盖丢失
+const WINDOW_MIN_HEIGHT = 680;
+// minWidth 抖动消除:需求宽度变化小于该值时不重设 minWidth(见 apply 注释)。
+// 取滚动条宽度的 2 倍:滚动条出现/消失正好造成 ±10px 抖动,必须完全吸收
+const NEED_HYSTERESIS = SCROLLBAR_WIDTH * 2;
+// 拖拽中不服坐标:用户正在拖窗口边缘时不下发 setSize(与手互相拉扯 = 闪烁),
+// 松手后由 RO/MO/兜底定时器触发重算补齐。窗口卡在 minWidth 时 WM 仍会派发
+// WM_SIZING(Windows),Rust 侧无法区分,只能由前端用时间阈值启发式判定
+const RESIZE_QUIET_MS = 150;
+
+/**
+ * 按内容实测宽度动态设置窗口最小宽度,保证横向滚动条不出现、统计卡不换行。
+ *
+ * 为什么不能写死常量:表格内容宽度由数据决定(模型名/渠道名/密钥名长度、
+ * 是否带重试角标、客户端 UA 长短都随数据变化),加上系统缩放与字体渲染
+ * 差异,同一份数据在不同机器上的像素宽度并不相同。写死值必然在某台机器
+ * 上偏差——之前手工累加各列 min-w 就是这么翻车的。统计卡同理:数值/提示
+ * 文案宽度随数据变,换行临界点也是实测出来的。
+ *
+ * 为什么不只量一个东西:表格是 w-max + min-w-full——窗口宽时表格被 min-w-full
+ * 撑到容器宽,offsetWidth/scrollWidth 都等于容器宽,量不出"内容到底需要多宽",
+ * 此时需要离屏克隆(width:max-content)量出真实内容宽;窗口窄时表格已经溢出,
+ * container.scrollWidth 就是精确所需(真字体、真缩放、真渲染,克隆量小的场景
+ * ——异步字体未就绪按回退字体度量、亚像素舍入——它统统免疫)。两者取大。
+ *
+ * 算法:
+ *  1. 表格内容宽度 = max(离屏克隆实测, 溢出时的 container.scrollWidth 实时值);
+ *     统计卡内容宽度 = 克隆按"每列 max-content"模板量出的四卡一行自然宽度;
+ *  2. 界面开销 = 窗口内宽 − 各自容器 clientWidth(侧栏 + 各层 padding +
+ *     卡片边框 + 纵向滚动条),实测而非硬编码,布局改了自动跟随;
+ *  3. 纵向滚动条按"始终存在"计入:列表短时没滚动条会少算约 10px,等翻页
+ *     内容变多滚动条一出现就正好溢出——最容易漏的边界;
+ *  4. 屏幕(逻辑宽)放得下的约束才参与取大:最终 minWidth =
+ *     max(配置下限, 表格需求, 统计卡需求)。放不下(小屏/高缩放)的约束
+ *     不抬高 minWidth——把最小宽度夹到屏幕宽会让窗口铺满整屏且拖不小
+ *     (实测翻车),此时溢出交给横向滚动条(表格 w-max 保证列不被压缩);
+ *  5. 若当前窗口已比所需窄且放得下(滚动条已出现),顺手撑到刚好够,
+ *     消除滚动条;放不下时不动窗口。
+ *
+ * 双保险(纯 CSS,不依赖 JS 链路成功):表格 w-max min-w-full 保证列永不被
+ * 压缩重叠;统计卡固定 grid-cols-4 保证四卡永不换行(窄时 truncate 收缩)。
+ * JS 实测的 minWidth 只是让它们"显示得舒展",失败也不破坏布局约束。
+ */
+function useMinWindowWidthForContent(
+  tableRef: React.RefObject<HTMLTableElement | null>,
+  statsRef: React.RefObject<HTMLDivElement | null>,
+  /** 表格是否已渲染:加载中/空态时表格不在 DOM,无法测量与观察 */
+  enabled: boolean,
+) {
+  // 注意依赖数组:必须包含 enabled。组件首次挂载时日志还在加载,<table> 尚未
+  // 渲染(tableRef.current 为 null);若只依赖 tableRef,effect 不会重跑,测量与
+  // ResizeObserver/MutationObserver 永远不会注册,动态 minWidth 从冷启动起就
+  // 失效(窗口停在配置最小宽,列内容被挤压重叠)。数据到达表格挂载、或翻页后
+  // 空态导致表格卸载时,都会重建/清理整套观察逻辑。
+  useEffect(() => {
+    const table = tableRef.current;
+    const stats = statsRef.current;
+    if (!enabled || !table) return;
+    let timer: number | undefined;
+    let disposed = false;
+    // 上次已下发的值:内容没变时不重复 IPC(ResizeObserver 会频繁触发)
+    let lastApplied = 0;
+    // 最近一次收到窗口 resize 事件的时间:判断用户是否正在拖拽(见 apply)。
+    // 事件来自 Tauri onResized,拖拽过程中会连续派发
+    let lastWinResizeAt = 0;
+    // 拖拽落定:最后一次 resize 事件后静默期结束,补跑一次 apply——
+    // 拖拽中被静默期跳过的"撑窗口"必须在松手后有人接手,否则漏掉
+    let dragSettleTimer: number | undefined;
+    const unlistenResize = getCurrentWindow().onResized(() => {
+      lastWinResizeAt = Date.now();
+      if (dragSettleTimer) window.clearTimeout(dragSettleTimer);
+      dragSettleTimer = window.setTimeout(schedule, RESIZE_QUIET_MS + 50);
+    });
+
+    /** 离屏测量:克隆 el,在 width:max-content + extraCss 下量自然内容宽度 */
+    const measureCloneWidth = (el: HTMLElement, extraCss: string): number => {
+      const clone = el.cloneNode(true) as HTMLElement;
+      // 绝对定位 + 不可见:参与布局(能算出宽度)但不显示、不占位、不触发滚动
+      // min-width:0 必须保留:表格克隆会继承 min-w-full,在宽窗口下被撑到容器宽
+      // → 量出的"内容宽"随窗口变宽而变大,与 min-w-full 相互抬升形成反馈循环
+      // (窗口每测一次就被撑大一次)。归零后量到的才是纯内容宽
+      clone.style.cssText = `position:absolute;top:0;left:-99999px;width:max-content;min-width:0;visibility:hidden;pointer-events:none;${extraCss}`;
+      // 挂在原节点父级上,继承同一套字体与字号,测量结果才准确
+      const host = el.parentElement ?? document.body;
+      host.appendChild(clone);
+      const width = clone.offsetWidth;
+      clone.remove();
+      return width;
+    };
+
+    /** 内容所需宽度:克隆测量与实时溢出值取大(后者免疫字体/舍入误差) */
+    const measureContentWidth = (container: HTMLElement): number => {
+      // 表格已溢出时 scrollWidth 就是精确所需;未溢出时等于容器宽(不可用)
+      const overflowWidth =
+        container.scrollWidth > container.clientWidth + 1
+          ? container.scrollWidth
+          : 0;
+      return Math.max(measureCloneWidth(table, ""), overflowWidth);
+    };
+
+    /** 统计卡"四卡一行不截断"的自然宽度:1fr 列改按 max-content 参与测量 */
+    const measureStatsWidth = (): number => {
+      if (!stats || !stats.isConnected) return 0;
+      // 列数从计算样式读,不写死 4:将来调整列数,测量自动跟随
+      const cols =
+        getComputedStyle(stats).gridTemplateColumns.split(" ").length || 4;
+      return measureCloneWidth(
+        stats,
+        `grid-template-columns:repeat(${cols},max-content);`,
+      );
+    };
+
+    const apply = async () => {
+      if (disposed) return;
+      const container = table.parentElement;
+      if (!container) return;
+      const contentWidth = measureContentWidth(container);
+      if (!contentWidth) return;
+
+      const win = getCurrentWindow();
+      const scaleFactor = await win.scaleFactor();
+      const innerWidth = (await win.innerSize()).toLogical(scaleFactor).width;
+      if (!innerWidth) return;
+
+      // 表格内容一行完整显示所需的宽度。纵向滚动条按"始终存在"计入
+      // (列表通常有滚动条;没有时这 10px 只是小余量),不读实时滚动条状态——
+      // 正是"滚动条出现 → 重算 → minWidth 变化 → 滚动条消失 → 再重算"的
+      // 翻转反馈造成了拖拽时的 minWidth 抖动,必须与滚动条状态解耦
+      const overhead = Math.max(0, innerWidth - container.clientWidth);
+      const tableNeed =
+        Math.ceil(contentWidth + overhead) + SCROLLBAR_WIDTH + 1;
+
+      // 统计卡四卡一行不截断(换行已由固定 4 列 CSS 禁掉,这是"不挤压")
+      let statsNeed = 0;
+      if (stats?.isConnected) {
+        const statsOverhead = Math.max(0, innerWidth - stats.clientWidth);
+        statsNeed = Math.ceil(measureStatsWidth() + statsOverhead) + 1;
+      }
+
+      // 屏幕可用宽度(留 16px 边框余量)。currentMonitor 是模块级函数
+      // (非 Window 实例方法),探测失败时按"放得下"处理
+      const monitor = await currentMonitor().catch(() => null);
+      const screenCap = monitor
+        ? Math.floor(monitor.size.width / monitor.scaleFactor) - 16
+        : 0;
+      // 各约束独立判断"屏幕放得下":放得下才参与抬高 minWidth,取最大者;
+      // 放不下(小屏/高缩放)的约束放弃——千万不能把 minWidth 顶到屏幕宽,
+      // 那会让窗口铺满整屏且拖不小(实测翻车)。放不下的后果:表格出横向
+      // 滚动条(w-max 保证列不压缩)、统计卡等比收缩(truncate 截断),
+      // 物理放不下时"保完整"只能让位给"保可用"
+      const candidates = [BASELINE_MIN_WIDTH];
+      for (const need of [tableNeed, statsNeed]) {
+        if (need > 0 && (screenCap <= 0 || need <= screenCap)) {
+          candidates.push(need);
+        }
+      }
+      const rawNeed = Math.max(...candidates);
+
+      // 抖动消除(迟滞):需求宽度小幅波动(±10px 量级,典型来源是测量与
+      // 布局的亚像素舍入)时不重设 minWidth。只允许"明显变宽"或"明显变窄"
+      // 才下发,窗口边界保持静止,拖到最小宽度时就不会再有宽度来回跳
+      let need = lastApplied;
+      if (
+        lastApplied === 0 ||
+        rawNeed > lastApplied ||
+        lastApplied - rawNeed > NEED_HYSTERESIS
+      ) {
+        need = rawNeed;
+      }
+
+      if (need !== lastApplied) {
+        lastApplied = need;
+        try {
+          // 高度传 minHeight(680)而不是 0:setMinSize 整组覆盖,传 0 会把
+          // tauri.conf.json 里的 minHeight 丢掉,窗口可被拖到任意矮
+          await win.setMinSize(new LogicalSize(need, WINDOW_MIN_HEIGHT));
+        } catch {
+          // 权限缺失或窗口已销毁:忽略,不影响页面其余功能
+          return;
+        }
+      }
+      // 已经比所需窄:撑到刚好够,把已经出现的横向滚动条消掉。
+      // 静默期不服坐标:用户正在拖窗口边缘时 setSize 会与手互相拉扯(闪烁),
+      // 松手后由 RO/MO 触发重算补齐;窗口已达到 minWidth 时也无须再撑
+      if (innerWidth < need && need - innerWidth > 2) {
+        if (Date.now() - lastWinResizeAt < RESIZE_QUIET_MS) return;
+        try {
+          const h = (await win.innerSize()).toLogical(await win.scaleFactor()).height;
+          await win.setSize(new LogicalSize(need, h));
+        } catch {
+          // 同上
+        }
+      }
+    };
+
+    // 内容变化(翻页/筛选/行内数据变化)后重算;50ms 抖动合并避免频繁 IPC
+    const schedule = () => {
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(() => void apply(), 50);
+    };
+
+    schedule();
+    const ro = new ResizeObserver(schedule);
+    ro.observe(table);
+    if (stats) ro.observe(stats);
+    // 行内文字变化也要重算(例如重试角标、模型名/统计数值变化),ResizeObserver 捕捉不到
+    const mo = new MutationObserver(schedule);
+    mo.observe(table, { childList: true, subtree: true, characterData: true });
+    if (stats) {
+      mo.observe(stats, { childList: true, subtree: true, characterData: true });
+    }
+    // 异步字体加载完成后用真字体重测:字体未就绪时克隆按回退字体度量,宽度偏小,
+    // 而 RO/MO 都感知不到"字体度量变化"——首轮 minWidth 偏低的主要来源
+    document.fonts?.ready.then(() => schedule());
+    // 兜底二次校准:首测可能仍早于布局最终稳定(图片图标加载、滚动条出现等),
+    // 350ms 后经同一抖动链再测一遍;apply 内 lastApplied 去重,值没变不会重复 IPC
+    const secondPass = window.setTimeout(schedule, 350);
+
+    return () => {
+      disposed = true;
+      if (timer) window.clearTimeout(timer);
+      window.clearTimeout(secondPass);
+      if (dragSettleTimer) window.clearTimeout(dragSettleTimer);
+      ro.disconnect();
+      mo.disconnect();
+      unlistenResize
+        .then((f) => f())
+        .catch(() => {});
+    };
+  }, [tableRef, statsRef, enabled]);
+}
 
 // ---------- 汇总卡:左图标色块 + 右标签/数值(同色)/小字提示 ----------
 
@@ -108,7 +349,7 @@ function StatCard({
           <Icon className="h-5 w-5" />
         </div>
         <div className="min-w-0">
-          <div className="text-xs text-muted-foreground">{label}</div>
+          <div className="truncate text-xs text-muted-foreground">{label}</div>
           <div
             className={cn(
               "truncate text-xl font-semibold tabular-nums leading-tight",
@@ -357,16 +598,16 @@ function LogRow({
   const clientDisplay = clientAlias ?? l.client;
   return (
     <tr className="border-b text-center last:border-0 hover:bg-accent/30">
-      <td className="whitespace-nowrap py-1.5 pr-0.5 font-mono text-xs" title={fmtFullTime(l.ts)}>
+      <td className="whitespace-nowrap py-1.5 pr-1 font-mono text-xs" title={fmtFullTime(l.ts)}>
         {fmtTime(l.ts)}
       </td>
-      <td className="py-1.5 pr-0.5">
+      <td className="py-1.5 pr-1">
         <Badge variant="secondary" className="whitespace-nowrap px-1.5 font-mono">
           {l.model}
         </Badge>
       </td>
       {/* 推理等级:请求携带的 reasoning_effort(minimal/low/medium/high);无则占位 */}
-      <td className="whitespace-nowrap py-1.5 pr-0.5">
+      <td className="whitespace-nowrap py-1.5 pr-1">
         {l.tag ? (
           <Badge variant="outline" className="px-1.5">
             {l.tag}
@@ -375,7 +616,7 @@ function LogRow({
           <span className="text-muted-foreground">—</span>
         )}
       </td>
-      <td className="py-1.5 pr-0.5 text-sm">
+      <td className="py-1.5 pr-1 text-sm">
         <span className="inline-flex items-center gap-1 whitespace-nowrap">
           {channelIcon &&
             (channelIcon.startsWith("data:image/") ? (
@@ -391,7 +632,7 @@ function LogRow({
           )}
         </span>
       </td>
-      <td className="whitespace-nowrap py-1.5 pr-0.5 font-mono text-xs leading-5">
+      <td className="whitespace-nowrap py-1.5 pr-1 font-mono text-xs leading-5">
         {/* 第一行:输入/输出;第二行:缓存命中/命中率。图标统一 h-3 w-3 与
             Database 同尺寸,输入↔命中、输出↔命中率左右对齐(两组各占同宽列);
             gap-x-2.5:输入列与输出列之间一档间隔(10px) */}
@@ -421,7 +662,7 @@ function LogRow({
         </div>
       </td>
       {/* 任务耗时:单元格保持左对齐;首字/生成耗时按快慢分档着色;非流式整块淡色 */}
-      <td className={cn("whitespace-nowrap py-1.5 pr-0.5 text-left font-mono text-xs leading-4", !l.isStream && "text-muted-foreground")}>
+      <td className={cn("whitespace-nowrap py-1.5 pr-1 text-left font-mono text-xs leading-4", !l.isStream && "text-muted-foreground")}>
         <div>
           <div className="flex items-center gap-1.5">
             <span className="h-3 w-0.5 shrink-0 rounded-full bg-zinc-400" />
@@ -459,7 +700,7 @@ function LogRow({
           </div>
         </div>
       </td>
-      <td className="whitespace-nowrap py-1.5 pr-0.5 font-mono text-xs">
+      <td className="whitespace-nowrap py-1.5 pr-1 font-mono text-xs">
         {l.cost != null && (
           <span title={l.estimated ? "usage 为本地估算" : undefined}>
             {l.estimated ? "~" : ""}
@@ -468,10 +709,10 @@ function LogRow({
         )}
         {l.cost == null && <span className="text-muted-foreground">—</span>}
       </td>
-      <td className="whitespace-nowrap py-1.5 pr-0.5">
+      <td className="whitespace-nowrap py-1.5 pr-1">
         <StatusCell status={l.status} />
       </td>
-      <td className="whitespace-nowrap py-1.5 pr-0.5">
+      <td className="whitespace-nowrap py-1.5 pr-1">
         {l.keyName ? (
           <Badge variant="outline" className="px-1.5">
             {l.keyName}
@@ -481,7 +722,7 @@ function LogRow({
         )}
       </td>
       <td
-        className="whitespace-nowrap py-1.5 pr-0.5 text-xs text-muted-foreground"
+        className="whitespace-nowrap py-1.5 pr-1 text-xs text-muted-foreground"
         title={l.client ?? undefined}
       >
         {clientDisplay ? (
@@ -497,16 +738,17 @@ function LogRow({
           "—"
         )}
       </td>
-      {/* 操作列 sticky 固定右侧:横向滚动时始终可点。
-          背景必须不透明(纯 bg-card,不跟随行 hover)——半透明底色会让横向
-          滚动时从它下面穿过的单元格文字透出来。
-          z-index 用 1(低于 thead 的 z-10):否则纵向滚动时行内容会盖住表头 */}
-      <td className="sticky right-0 z-[1] whitespace-nowrap border-l bg-card py-1.5 pl-1">
+      {/* 操作列:表格宽度由内容决定(w-max)后,它天然是最右一列,不需要 sticky。
+          之前的 sticky right-0 在表格比容器宽时会把本列左移、盖住左侧
+          「客户端」列的文字(截图里 deepseek-harness 被裁成 deepseek-harnes)。
+          保留 border-l 做常驻分隔即可 */}
+      <td className="whitespace-nowrap border-l py-1.5 pl-1">
         <Button variant="ghost" size="sm" onClick={onDetail}>
           详情
         </Button>
       </td>
-    </tr>  );
+    </tr>
+  );
 }
 
 // ---------- 数据总览页 ----------
@@ -525,6 +767,9 @@ export function DashboardPage() {
   const [modelFilter, setModelFilter] = useState("all");
   const [page, setPage] = useState(0);
   const [detailId, setDetailId] = useState<number | null>(null);
+  const tableRef = useRef<HTMLTableElement>(null);
+  // 统计卡栅格:四卡一行所需宽度也参与窗口 minWidth 约束(见 useMinWindowWidthForContent)
+  const statsRef = useRef<HTMLDivElement>(null);
 
   const filter = useMemo<LogFilter>(
     () => ({
@@ -541,6 +786,10 @@ export function DashboardPage() {
   const { data: stats } = useStats(filter);
   const { data, isLoading, isFetching } = useLogs(filter);
   const [items, total] = data ?? [[], 0];
+  // 表格 + 统计卡内容真实宽度 → 反推窗口最小宽度(见 useMinWindowWidthForContent)。
+  // enabled 必须放这:数据到位后 <table> 才会渲染,冷启动首帧表格还不存在
+  const tableMounted = !isLoading && items.length > 0;
+  useMinWindowWidthForContent(tableRef, statsRef, tableMounted);
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
   // 日志清理/筛选结果变少后 total 缩水:把当前页收敛进有效范围,避免空页/越界页码
   const safePage = Math.min(page, pageCount - 1);
@@ -671,8 +920,12 @@ export function DashboardPage() {
         </Select>
       </div>
 
-      {/* 汇总卡片:图标色块风,与筛选联动 */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      {/* 汇总卡片:图标色块风,与筛选联动。
+          固定 grid-cols-4:四卡一行是硬约束,不允许响应式断点把它折成两行
+          (sm:grid-cols-2 xl:grid-cols-4 会在 ~1280 触发换行,实测翻车)。
+          窗口不够宽时 minWidth 会顶住(见 useMinWindowWidthForContent);
+          小屏放不下时卡片按 min-w-0/truncate 收缩,也绝不换行 */}
+      <div ref={statsRef} className="grid grid-cols-4 gap-3">
         <StatCard
           icon={Link2}
           tile="bg-[#8B7BE8]/15 text-[#8B7BE8]"
@@ -758,29 +1011,29 @@ export function DashboardPage() {
               </p>
             </div>
           ) : (
-            <table className="w-full min-w-[1040px] text-sm">
+            <table ref={tableRef} className="w-max min-w-full text-sm">
               <thead className="sticky top-0 z-10 bg-card">
-                {/* 列宽策略:auto 布局 + 所有单元格 whitespace-nowrap,浏览器会把
-                    每列压到"内容最小完整显示宽度"——低于此宽度表格自己就会溢出
-                    滚动,不会挤压或截断内容。不再给列设固定百分比/max-w 限制,
-                    那些约束会在容器宽度不足时把列压变形。
-                    任务耗时列内容与表头均左对齐(竖条锚点行),其余居中。
-                    操作列 sticky right-0:横向滚动时钉在右侧始终可点,
-                    故需自带不透明背景(否则滚动内容会透上来) */}
+                {/* 列宽策略:w-max 让表格按内容取宽(硬保底,列永不被压缩重叠),
+                    min-w-full 在窗口更宽时把表格撑满容器——多余空间按各列内容
+                    比例分配,列均匀舒展,不会缩在左边留一片空白。
+                    窄窗口的体验由"测量 + 窗口最小宽度"负责(见 useMinWindow
+                    WidthForTable):内容一行完整显示所需的宽度是运行时实测的,
+                    实测结果用于设置窗口 minWidth,让用户拖不到会溢出的宽度。
+                    双保险:minWidth 因任何原因(权限/时序/测量偏差)没生效时,
+                    表格只是溢出出横向滚动条,列内容依然完整可读。
+                    任务耗时列内容与表头均左对齐(竖条锚点行),其余居中。 */}
                 <tr className="border-b text-center text-xs text-muted-foreground">
-                  <th className="whitespace-nowrap py-2 pr-0.5 font-medium">时间</th>
-                  <th className="whitespace-nowrap py-2 pr-0.5 font-medium">模型</th>
-                  <th className="whitespace-nowrap py-2 pr-0.5 font-medium">推理</th>
-                  <th className="whitespace-nowrap py-2 pr-0.5 font-medium">渠道</th>
-                  <th className="whitespace-nowrap py-2 pr-0.5 font-medium">词元</th>
-                  <th className="whitespace-nowrap py-2 pr-0.5 text-left font-medium">任务耗时</th>
-                  <th className="whitespace-nowrap py-2 pr-0.5 font-medium">费用</th>
-                  <th className="whitespace-nowrap py-2 pr-0.5 font-medium">状态</th>
-                  <th className="whitespace-nowrap py-2 pr-0.5 font-medium">密钥</th>
-                  <th className="whitespace-nowrap py-2 pr-0.5 font-medium">客户端</th>
-                  <th className="sticky right-0 z-10 whitespace-nowrap border-l bg-card py-2 pl-1 font-medium">
-                    操作
-                  </th>
+                  <th className="whitespace-nowrap py-2 pr-1 font-medium">时间</th>
+                  <th className="whitespace-nowrap py-2 pr-1 font-medium">模型</th>
+                  <th className="whitespace-nowrap py-2 pr-1 font-medium">推理</th>
+                  <th className="whitespace-nowrap py-2 pr-1 font-medium">渠道</th>
+                  <th className="whitespace-nowrap py-2 pr-1 font-medium">词元</th>
+                  <th className="whitespace-nowrap py-2 pr-1 text-left font-medium">任务耗时</th>
+                  <th className="whitespace-nowrap py-2 pr-1 font-medium">费用</th>
+                  <th className="whitespace-nowrap py-2 pr-1 font-medium">状态</th>
+                  <th className="whitespace-nowrap py-2 pr-1 font-medium">密钥</th>
+                  <th className="whitespace-nowrap py-2 pr-1 font-medium">客户端</th>
+                  <th className="whitespace-nowrap py-2 pl-2 font-medium">操作</th>
                 </tr>
               </thead>
               <tbody>

@@ -10,6 +10,10 @@ pub struct AuthedKey {
     pub name: String,
     /// 有序渠道 id(顺序即故障转移顺序)
     pub channels: Vec<i64>,
+    /// 模型白名单;空 = 不限制(该密钥可用渠道的所有模型都放行)
+    pub models: Vec<String>,
+    /// 模型 → 有序渠道 id:该模型的渠道路由优先级;缺省模型跟随 channels 全局顺序
+    pub model_channels: crate::store::api_keys::ModelChannels,
 }
 
 /// 自建密钥认证:接受 Bearer / x-api-key / x-goog-api-key / ?key=,常量时间比较
@@ -58,6 +62,8 @@ pub fn authenticate(
         id: k.id,
         name: k.name.clone(),
         channels: k.channels.clone(),
+        models: k.models.clone(),
+        model_channels: k.model_channels.clone(),
     })
 }
 

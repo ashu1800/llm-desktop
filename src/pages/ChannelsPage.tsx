@@ -1,8 +1,10 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   Cable,
+  Eye,
+  EyeOff,
   ImagePlus,
   Loader2,
   Pencil,
@@ -114,23 +116,19 @@ function RateRuleEditor({
     next[i] = { ...next[i], ...p };
     onChange(next);
   };
-  const fmtRule = (r: RateRule) => {
-    const model = r.model.trim() || "全部模型";
-    const day = DAY_TYPE_OPTIONS.find((d) => d.value === r.dayType)?.label ?? r.dayType;
-    const time = r.timeRange.trim() ? ` ${r.timeRange}` : "";
-    return `${model} · ${day}${time} · ×${r.rate}`;
-  };
 
   return (
     <div className="space-y-1.5">
       {rules.map((r, i) => (
-        <div key={i} className="space-y-1 rounded-lg border bg-muted/30 px-2.5 py-2">
-          <div className="flex flex-wrap items-center gap-1.5">
+        <div key={i} className="rounded-lg border bg-muted/30 px-2.5 py-2">
+          {/* 单行铺满容器:模型名吃掉全部剩余宽度(min-w-0 防长名撑破),
+              倍率/日类型/时段按内容定宽 */}
+          <div className="flex items-center gap-1.5">
             <Input
               value={r.model}
               onChange={(e) => patch(i, { model: e.target.value })}
               placeholder="模型(gpt* 通配,空=全部)"
-              className="h-7 w-40 font-mono text-xs"
+              className="h-7 min-w-0 flex-1 font-mono text-xs"
             />
             <span className="text-xs text-muted-foreground">×</span>
             <Input
@@ -150,10 +148,10 @@ function RateRuleEditor({
                 const n = Number(e.target.value);
                 if (e.target.value === "" || !Number.isFinite(n)) patch(i, { rate: 1 });
               }}
-              className="h-7 w-16 text-xs"
+              className="h-7 w-16 shrink-0 text-xs"
             />
             <Select value={r.dayType || "all"} onValueChange={(v) => patch(i, { dayType: v })}>
-              <SelectTrigger className="h-7 w-28 text-xs">
+              <SelectTrigger className="h-7 w-24 shrink-0 text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -168,25 +166,18 @@ function RateRuleEditor({
               value={r.timeRange}
               onChange={(e) => patch(i, { timeRange: e.target.value })}
               placeholder="HH:MM-HH:MM(可选)"
-              className="h-7 w-32 font-mono text-xs"
+              className="h-7 w-36 shrink-0 font-mono text-xs"
             />
             <Button
               variant="ghost"
               size="icon"
-              className="ml-auto h-7 w-7 text-muted-foreground hover:text-destructive"
+              className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
               title="删除规则"
               onClick={() => onChange(rules.filter((_, j) => j !== i))}
             >
               <Trash2 className="h-3.5 w-3.5" />
             </Button>
           </div>
-          <Input
-            value={r.remark}
-            onChange={(e) => patch(i, { remark: e.target.value })}
-            placeholder="备注,如:春节 5 折"
-            className="h-6 w-full border-0 bg-transparent px-0 text-xs shadow-none focus-visible:ring-0"
-            maxLength={30}
-          />
         </div>
       ))}
       <Button
@@ -199,12 +190,6 @@ function RateRuleEditor({
       >
         <Plus className="h-3 w-3" /> 添加倍率规则
       </Button>
-      {rules.length > 0 && (
-        <p className="text-xs text-muted-foreground">
-          请求按规则从上到下匹配,命中多条时以最后一条为准;费用 = 定价 × 倍率。
-          已配置:{rules.map(fmtRule).join(" / ")}
-        </p>
-      )}
     </div>
   );
 }
@@ -223,7 +208,8 @@ type ModelRow = { out: string; up: string };
 function toRows(models: string[], modelMap: Record<string, string>): ModelRow[] {
   const rows: ModelRow[] = models.map((m) => ({
     out: m,
-    up: modelMap[m] && modelMap[m] !== m ? modelMap[m] : "",
+    // 同名映射(值 === 键)也要回显:用户显式填了同名上游名,不能显示成没填
+    up: modelMap[m] ?? "",
   }));
   // modelMap 里有但 models 漏了的条目(历史数据/导入)也要显示,否则会静默丢失
   for (const [k, v] of Object.entries(modelMap)) {
@@ -244,8 +230,9 @@ function fromRows(rows: ModelRow[]): {
     if (!out || models.includes(out)) continue;
     models.push(out);
     const up = r.up.trim();
-    // 上游名与对外名相同则不必存映射(等价于透传)
-    if (up && up !== out) modelMap[out] = up;
+    // 同名也保存(用户显式填写,回显才不失真):数据面上 值===键 的映射
+    // 与透传完全等价(mapped_model 命中后取到的还是同名),纯冗余无害
+    if (up) modelMap[out] = up;
   }
   return { models, modelMap };
 }
@@ -267,7 +254,24 @@ function ModelsField({
   apiKey: string;
   proxy: string | null;
 }) {
-  const rows = toRows(models, modelMap);
+  // 行状态是本地草稿:空行(刚"添加一行"、正在输入对外名之前)必须能存活。
+  // 之前直接 commit 到父层,fromRows 会把对外名为空的行丢弃——"添加一行"
+  // 瞬间被规整掉,按钮看起来完全无效
+  const [rows, setRows] = useState<ModelRow[]>(() => toRows(models, modelMap));
+  // 上一次 commit 写回父层的规整结果(序列化比较):props 变化时区分两种情况——
+  // 与上次写回一致 = 自己 commit 的回声,不能重同步(否则空行又被规整掉);
+  // 不一致 = 外部真实变化(换渠道编辑/其他路径写回),才把 props 重同步进草稿
+  const lastPushedRef = useRef(
+    JSON.stringify(fromRows(toRows(models, modelMap))),
+  );
+  useEffect(() => {
+    const incoming = JSON.stringify({ models, modelMap });
+    if (incoming !== lastPushedRef.current) {
+      lastPushedRef.current = incoming;
+      setRows(toRows(models, modelMap));
+    }
+  }, [models, modelMap]);
+
   // 上游拉到的全量候选(勾选来源)
   const [candidates, setCandidates] = useState<string[] | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -282,7 +286,13 @@ function ModelsField({
     ...Object.values(modelMap).filter(Boolean),
   ]);
 
-  const commit = (next: ModelRow[]) => onChange(fromRows(next));
+  // 草稿 → 父层:写回规整结果并记录指纹,草稿本身保留空行
+  const commit = (next: ModelRow[]) => {
+    setRows(next);
+    const normalized = fromRows(next);
+    lastPushedRef.current = JSON.stringify(normalized);
+    onChange(normalized);
+  };
 
   const patchRow = (i: number, patch: Partial<ModelRow>) => {
     commit(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
@@ -340,9 +350,9 @@ function ModelsField({
     <div className="space-y-1.5">
       <div className="flex items-center justify-between">
         <Label>
-          支持的模型
+          支持的模型<span className="ml-0.5 text-destructive">*</span>
           <span className="ml-1 text-muted-foreground">
-            (留空 = 不限制;上游模型名留空 = 同名透传)
+            (至少一条;上游模型名留空 = 同名透传)
           </span>
         </Label>
         <Button
@@ -416,14 +426,14 @@ function ModelsField({
         </Button>
         {rows.length > 0 && (
           <span className="text-xs text-muted-foreground">
-            共 {rows.length} 条
+            共 {rows.filter((r) => r.out.trim()).length} 条
           </span>
         )}
       </div>
 
       <p className="text-xs text-muted-foreground">
         {rows.length === 0
-          ? "留空 = 不限制,任何模型都路由到此渠道"
+          ? "至少添加一条模型,渠道才会参与路由"
           : "仅列表内模型命中;上游模型名留空则按同名转发到上游"}
       </p>
 
@@ -502,12 +512,17 @@ function ChannelDialog({
   const qc = useQueryClient();
   const [form, setForm] = useState<Channel | null>(editing);
   const [pickingIcon, setPickingIcon] = useState(false);
+  // 已揭示明文的 Key 行下标集合:每行独立切换;换编辑对象时整体重置回隐藏
+  const [revealed, setRevealed] = useState<Set<number>>(new Set());
   // 命名代理池(设置-代理管理):下拉引用,存 proxy:<name> 形式
   const { data: settings } = useSettings();
   const namedProxies = settings?.proxies ?? [];
   const namedByCaseUrl = (url: string) =>
     namedProxies.find((p) => p.url === url);
-  useEffect(() => setForm(editing), [editing]);
+  useEffect(() => {
+    setForm(editing);
+    setRevealed(new Set());
+  }, [editing]);
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -525,7 +540,10 @@ function ChannelDialog({
 
   if (!form) return null;
   const patch = (p: Partial<Channel>) => setForm({ ...form, ...p });
-  const valid = form.name.trim() && form.baseUrl.trim();
+  // 必填:名称、Base URL、支持的模型(至少一条有效对外模型名)
+  // models 里有条目但对外名全是空白(草稿未填完)同样视为未填
+  const hasModel = form.models.some((m) => m.trim() !== "");
+  const valid = form.name.trim() && form.baseUrl.trim() && hasModel;
   const isImageIcon = form.icon.startsWith("data:image/");
 
   const pickIcon = async () => {
@@ -542,12 +560,15 @@ function ChannelDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[85vh] max-w-2xl overflow-auto">
-        <DialogHeader>
+      {/* flex 列布局 + 高度上限:滚动发生在中间内容区,Footer 常驻弹窗底部
+          (固定悬浮,不随内容滚走)——与密钥编辑弹窗同款三段式 */}
+      <DialogContent className="flex max-h-[85vh] max-w-2xl flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
           <DialogTitle>{form.id === 0 ? "新建渠道" : "编辑渠道"}</DialogTitle>
         </DialogHeader>
-        <div className="grid gap-4">
-          <div className="grid grid-cols-2 gap-4">
+        <div className="-mr-2 grid min-h-0 flex-1 gap-4 overflow-y-auto pr-2">
+          {/* 名称 + 协议 + 币种一行:名称自适应占宽,两个下拉按内容收窄 */}
+          <div className="grid grid-cols-[minmax(0,1fr)_150px_120px] items-end gap-4">
             <div className="space-y-1.5">
               <Label>名称</Label>
               <div className="flex items-center gap-2">
@@ -644,20 +665,44 @@ function ChannelDialog({
             <div className="space-y-1.5">
               {form.apiKeys.map((k, i) => (
                 <div key={i} className="flex items-center gap-2">
-                  <Input
-                    type="password"
-                    value={k}
-                    placeholder="sk-..."
-                    className="font-mono"
-                    onChange={(e) => {
-                      const keys = [...form.apiKeys];
-                      keys[i] = e.target.value;
-                      patch({ apiKeys: keys });
-                    }}
-                  />
+                  {/* 相对定位容器:眼睛按钮绝对定位在输入框内右缘,不占输入框宽度。
+                      min-w-0 防 flex 溢出,输入框完整显示四边边框(此前被挤裁) */}
+                  <div className="relative min-w-0 flex-1">
+                    <Input
+                      type={revealed.has(i) ? "text" : "password"}
+                      value={k}
+                      placeholder="sk-..."
+                      className="font-mono pr-9"
+                      onChange={(e) => {
+                        const keys = [...form.apiKeys];
+                        keys[i] = e.target.value;
+                        patch({ apiKeys: keys });
+                      }}
+                    />
+                    <button
+                      type="button"
+                      title={revealed.has(i) ? "隐藏明文" : "查看明文"}
+                      className="absolute inset-y-0 right-2 my-auto flex h-6 w-6 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+                      onClick={() =>
+                        setRevealed((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(i)) next.delete(i);
+                          else next.add(i);
+                          return next;
+                        })
+                      }
+                    >
+                      {revealed.has(i) ? (
+                        <EyeOff className="h-3.5 w-3.5" />
+                      ) : (
+                        <Eye className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  </div>
                   <Button
                     variant="ghost"
                     size="icon"
+                    className="shrink-0"
                     disabled={form.apiKeys.length <= 1}
                     onClick={() =>
                       patch({
@@ -786,7 +831,16 @@ function ChannelDialog({
             </div>
           </div>
         </div>
-        <DialogFooter>
+        {/* Footer 常驻底部:上缘渐变遮罩暗示下方还有内容,滚动内容从其下穿过 */}
+        <DialogFooter className="relative shrink-0 items-center gap-2 pt-1">
+          <div className="pointer-events-none absolute -top-4 right-0 h-4 w-full bg-gradient-to-t from-background to-transparent" />
+          {!valid && (
+            <span className="mr-auto text-xs text-muted-foreground">
+              {!form.name.trim() && "请填写名称;"}
+              {!form.baseUrl.trim() && "请填写 Base URL;"}
+              {!hasModel && "至少添加一条支持的模型"}
+            </span>
+          )}
           <Button variant="outline" onClick={onClose}>
             取消
           </Button>

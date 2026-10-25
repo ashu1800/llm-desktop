@@ -48,8 +48,20 @@ export const api = {
 
   // 密钥
   listApiKeys: () => invoke<ApiKey[]>("list_api_keys"),
-  createApiKey: (name: string, remark: string, channels: number[]) =>
-    invoke<ApiKey>("create_api_key", { name, remark, channels }),
+  createApiKey: (
+    name: string,
+    remark: string,
+    channels: number[],
+    models: string[],
+    modelChannels: Record<string, number[]>,
+  ) =>
+    invoke<ApiKey>("create_api_key", {
+      name,
+      remark,
+      channels,
+      models,
+      modelChannels,
+    }),
   updateApiKey: (key: ApiKey) => invoke<void>("update_api_key", { key }),
   setApiKeyEnabled: (id: number, enabled: boolean) =>
     invoke<void>("set_api_key_enabled", { id, enabled }),

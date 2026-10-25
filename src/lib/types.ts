@@ -143,6 +143,10 @@ export interface ApiKey {
   key: string;
   enabled: boolean;
   channels: number[];
+  /** 模型白名单;空 = 不限制(可用渠道的所有模型) */
+  models: string[];
+  /** 模型 → 有序渠道 id:该模型的渠道调用优先级;缺省模型跟随 channels 全局顺序 */
+  modelChannels: Record<string, number[]>;
   remark: string;
   createdAt: number;
   lastUsedAt: number | null;

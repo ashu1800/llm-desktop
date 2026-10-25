@@ -1,6 +1,6 @@
 [package]
 name = "llm-desktop"
-version = "0.1.10"
+version = "0.1.11"
 description = "本地 LLM API 网关"
 edition = "2021"
 
@@ -64,6 +64,14 @@ reqwest = { version = "0.12", default-features = false, features = [
   "deflate",
   "socks",
   "http2",
+] }
+# tauri-plugin-updater 依赖 reqwest 0.13 但没开 socks,导致更新检查遇到
+# socks5:// 代理时报 "unknown proxy scheme"。cargo feature 按 crate 版本隔离,
+# 0.12 的 socks 不会传染给 0.13,故此处显式再声明 0.13 并开 socks——
+# feature union 会作用到插件用的同一个 0.13 实例上。
+# 纯 feature 声明,业务代码仍用上面的 reqwest 0.12,勿在本工程引用 reqwest13。
+reqwest13 = { package = "reqwest", version = "0.13", default-features = false, features = [
+  "socks",
 ] }
 tauri-plugin-opener = "2.7.2"
 

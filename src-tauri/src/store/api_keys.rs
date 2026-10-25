@@ -3,7 +3,13 @@ use sqlx::{Executor, SqlitePool};
 
 use crate::util::{now_ms, rand_hex};
 
-/// 自建访问密钥;channels 为有序渠道 id 列表(顺序即故障转移顺序)
+/// 模型级路由:该模型按序优先调用哪些渠道(渠道 id 有序,顺序即优先级)。
+/// 反序列化容忍旧数据里的非数组值(直接丢弃该模型的定制)
+pub type ModelChannels = std::collections::HashMap<String, Vec<i64>>;
+
+/// 自建访问密钥;channels 为有序渠道 id 列表(顺序即故障转移顺序)。
+/// models 为模型白名单(空 = 不限制);model_channels 为模型 → 渠道优先级
+/// (缺省模型跟随 channels 的全局顺序)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiKey {
@@ -12,6 +18,10 @@ pub struct ApiKey {
     pub key: String,
     pub enabled: bool,
     pub channels: Vec<i64>,
+    #[serde(default)]
+    pub models: Vec<String>,
+    #[serde(default)]
+    pub model_channels: ModelChannels,
     pub remark: String,
     pub created_at: i64,
     pub last_used_at: Option<i64>,
@@ -28,6 +38,8 @@ struct ApiKeyRow {
     key: String,
     enabled: bool,
     channels: String,
+    models: String,
+    model_channels: String,
     remark: String,
     created_at: i64,
     last_used_at: Option<i64>,
@@ -41,6 +53,8 @@ impl ApiKeyRow {
             key: self.key,
             enabled: self.enabled,
             channels: serde_json::from_str(&self.channels).unwrap_or_default(),
+            models: serde_json::from_str(&self.models).unwrap_or_default(),
+            model_channels: serde_json::from_str(&self.model_channels).unwrap_or_default(),
             remark: self.remark,
             created_at: self.created_at,
             last_used_at: self.last_used_at,
@@ -50,7 +64,7 @@ impl ApiKeyRow {
 
 pub async fn list(pool: &SqlitePool) -> Result<Vec<ApiKey>, String> {
     let rows: Vec<ApiKeyRow> = sqlx::query_as(
-        "SELECT id, name, key, enabled, channels, remark, created_at, last_used_at
+        "SELECT id, name, key, enabled, channels, models, model_channels, remark, created_at, last_used_at
          FROM api_keys ORDER BY id",
     )
     .fetch_all(pool)
@@ -61,13 +75,15 @@ pub async fn list(pool: &SqlitePool) -> Result<Vec<ApiKey>, String> {
 
 pub async fn insert(pool: impl Executor<'_, Database = sqlx::Sqlite>, k: &ApiKey) -> Result<i64, String> {
     let row: (i64,) = sqlx::query_as(
-        "INSERT INTO api_keys (name, key, enabled, channels, remark, created_at)
-         VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO api_keys (name, key, enabled, channels, models, model_channels, remark, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(&k.name)
     .bind(&k.key)
     .bind(k.enabled)
     .bind(serde_json::to_string(&k.channels).map_err(|e| e.to_string())?)
+    .bind(serde_json::to_string(&k.models).map_err(|e| e.to_string())?)
+    .bind(serde_json::to_string(&k.model_channels).map_err(|e| e.to_string())?)
     .bind(&k.remark)
     .bind(now_ms())
     .fetch_one(pool)
@@ -77,10 +93,12 @@ pub async fn insert(pool: impl Executor<'_, Database = sqlx::Sqlite>, k: &ApiKey
 }
 
 pub async fn update(pool: &SqlitePool, k: &ApiKey) -> Result<(), String> {
-    sqlx::query("UPDATE api_keys SET name=?, enabled=?, channels=?, remark=? WHERE id=?")
+    sqlx::query("UPDATE api_keys SET name=?, enabled=?, channels=?, models=?, model_channels=?, remark=? WHERE id=?")
         .bind(&k.name)
         .bind(k.enabled)
         .bind(serde_json::to_string(&k.channels).map_err(|e| e.to_string())?)
+        .bind(serde_json::to_string(&k.models).map_err(|e| e.to_string())?)
+        .bind(serde_json::to_string(&k.model_channels).map_err(|e| e.to_string())?)
         .bind(&k.remark)
         .bind(k.id)
         .execute(pool)

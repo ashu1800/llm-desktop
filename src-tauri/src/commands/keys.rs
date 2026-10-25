@@ -15,6 +15,8 @@ pub async fn create_api_key(
     name: String,
     remark: String,
     channels: Vec<i64>,
+    models: Option<Vec<String>>,
+    model_channels: Option<crate::store::api_keys::ModelChannels>,
 ) -> Result<ApiKey, String> {
     let key = ApiKey {
         id: 0,
@@ -22,6 +24,8 @@ pub async fn create_api_key(
         key: api_keys::generate_key(),
         enabled: true,
         channels,
+        models: models.unwrap_or_default(),
+        model_channels: model_channels.unwrap_or_default(),
         remark,
         created_at: 0,
         last_used_at: None,

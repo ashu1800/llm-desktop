@@ -115,6 +115,10 @@ mod tests {
             key: crate::store::api_keys::generate_key(),
             enabled: true,
             channels: vec![1, 2, 3],
+            models: vec!["gpt-4o".into()],
+            model_channels: [("gpt-4o".into(), vec![2, 1])]
+                .into_iter()
+                .collect(),
             remark: String::new(),
             created_at: 0,
             last_used_at: None,
@@ -122,6 +126,8 @@ mod tests {
         let kid = crate::store::api_keys::insert(&pool, &key).await.unwrap();
         let keys = crate::store::api_keys::list(&pool).await.unwrap();
         assert_eq!(keys[0].channels, vec![1, 2, 3]);
+        assert_eq!(keys[0].models, vec!["gpt-4o"]);
+        assert_eq!(keys[0].model_channels.get("gpt-4o"), Some(&vec![2, 1]));
         assert!(keys[0].key.starts_with("sk-gw-") && keys[0].key.len() == 32 + 6);
         crate::store::api_keys::delete(&pool, kid).await.unwrap();
 

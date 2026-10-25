@@ -247,14 +247,48 @@ async fn gateway_inner(
         .map(|id| (id.clone(), ir.messages.clone()));
 
     let all_channels = util::read_ok(&state.channels).clone();
+    // 密钥模型白名单:非空时请求模型必须在列,否则 404。
+    // 空 = 放行(不限模型)——v0.1.10 及更早创建的存量密钥没有该字段,
+    // 若"空即全拒"会让升级后所有存量密钥立即失效(破坏性变更,禁止)。
+    // UI 保存已强制新密钥至少勾选一个模型,空名单只可能来自旧数据,
+    // 按"不限模型"兼容处理
+    if !key.models.is_empty() && !key.models.iter().any(|m| m == &model_in) {
+        return GatewayError::not_found(format!(
+            "模型 {model_in} 不在该密钥的可用模型列表内"
+        ))
+        .render(entry);
+    }
+    // 模型级路由:该模型配置了渠道优先级则按其排序(与密钥渠道列表求交集,
+    // 顺序以模型配置为准),否则跟随密钥的渠道全局顺序
+    let routed_channels: Vec<crate::store::channels::Channel> = match key
+        .model_channels
+        .get(&model_in)
+    {
+        Some(order) if !order.is_empty() => {
+            let mut picked: Vec<crate::store::channels::Channel> = order
+                .iter()
+                .filter_map(|id| all_channels.iter().find(|c| &c.id == id))
+                .cloned()
+                .collect();
+            // 全局顺序里还有、模型顺序漏掉的渠道追加在尾部(仍可用,只是排后面)
+            for ch in &all_channels {
+                if key.channels.contains(&ch.id) && !picked.iter().any(|c| c.id == ch.id) {
+                    picked.push(ch.clone());
+                }
+            }
+            picked
+        }
+        _ => key
+            .channels
+            .iter()
+            .filter_map(|id| all_channels.iter().find(|c| &c.id == id))
+            .cloned()
+            .collect(),
+    };
     let mut attempts: Vec<Value> = Vec::new();
     let mut last_error = String::from("无可用渠道");
 
-    for ch in key
-        .channels
-        .iter()
-        .filter_map(|id| all_channels.iter().find(|c| &c.id == id))
-    {
+    for ch in &routed_channels {
         if !ch.enabled {
             continue;
         }
@@ -994,6 +1028,8 @@ async fn start_stream(
         id: key.id,
         name: key.name.clone(),
         channels: key.channels.clone(),
+        models: key.models.clone(),
+        model_channels: key.model_channels.clone(),
     };
     let ch2 = ch.clone();
     let model_in2 = model_in.to_string();
@@ -1143,6 +1179,11 @@ fn channel_public_models(ch: &Channel, fallback: &[String]) -> Vec<String> {
 
 /// 聚合该密钥可用渠道的**对外模型名**清单(排序去重)。
 ///
+/// 密钥配了模型白名单(models 非空)时只暴露白名单内的模型——
+/// 客户端能看到的应该与实际能用的完全一致,否则会出现"列表里有、
+/// 请求被 404"的割裂体验。空白名单(旧数据)按"不限模型"兼容,
+/// 暴露渠道全部对外模型(与请求侧放行行为一致)。
+///
 /// 渠道"模型不限"(models 为空)时无从枚举,用定价表全量模型兜底——
 /// 定价表即用户声明可计费的模型全集;否则空列表会让严格客户端直接判定不可用
 fn key_model_list(state: &AppState, key: &auth::AuthedKey) -> Vec<String> {
@@ -1168,6 +1209,9 @@ fn key_model_list(state: &AppState, key: &auth::AuthedKey) -> Vec<String> {
                 }
             }
         }
+    }
+    if !key.models.is_empty() {
+        models.retain(|m| key.models.contains(m));
     }
     models.sort();
     models
