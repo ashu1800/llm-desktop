@@ -8,6 +8,7 @@ import type {
   ServiceStatus,
   TestChannelResult,
   UnpricedModel,
+  UpstreamProto,
   LogDetail,
   LogFilter,
   LogItem,
@@ -34,8 +35,16 @@ export const api = {
   deleteChannel: (id: number) => invoke<void>("delete_channel", { id }),
   setChannelEnabled: (id: number, enabled: boolean) =>
     invoke<void>("set_channel_enabled", { id, enabled }),
+  /** 渠道对话测试:发真实消息,返回回复/首字/总耗时 */
   testChannel: (id: number, prompt?: string, model?: string) =>
     invoke<TestChannelResult>("test_channel", { id, prompt, model }),
+  /** 拉取上游支持的模型列表(渠道编辑"获取模型"用) */
+  fetchUpstreamModels: (args: {
+    baseUrl: string;
+    protocol: UpstreamProto;
+    apiKey: string;
+    proxy?: string | null;
+  }) => invoke<string[]>("fetch_upstream_models", args),
 
   // 密钥
   listApiKeys: () => invoke<ApiKey[]>("list_api_keys"),

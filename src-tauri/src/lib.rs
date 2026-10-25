@@ -45,6 +45,8 @@ pub fn run() {
         // 自动更新:检查 GitHub Releases 的 latest.json,下载后校验 minisign 签名安装
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        // 外链用系统默认浏览器打开(侧栏 GitHub 链接);WebView2 内点击 <a target=_blank> 默认被拦
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let handle = app.handle().clone();
             let state = tauri::async_runtime::block_on(init_state(&handle))?;
@@ -116,6 +118,7 @@ pub fn run() {
             commands::channels::delete_channel,
             commands::channels::set_channel_enabled,
             commands::channels::test_channel,
+            commands::channels::fetch_upstream_models,
             commands::keys::list_api_keys,
             commands::keys::create_api_key,
             commands::keys::update_api_key,

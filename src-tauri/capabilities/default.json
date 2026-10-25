@@ -16,6 +16,10 @@
     "dialog:default",
     "log:default",
     "updater:default",
-    "process:allow-restart"
+    "process:allow-restart",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://github.com/ashu1800/llm-desktop*" }]
+    }
   ]
 }

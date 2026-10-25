@@ -2,6 +2,8 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
   ChevronLeft,
   ChevronRight,
   CircleCheck,
@@ -10,6 +12,7 @@ import {
   Database,
   Link2,
   Loader2,
+  Percent,
   RefreshCw,
   ScrollText,
 } from "lucide-react";
@@ -354,16 +357,16 @@ function LogRow({
   const clientDisplay = clientAlias ?? l.client;
   return (
     <tr className="border-b text-center last:border-0 hover:bg-accent/30">
-      <td className="py-1.5 pr-0.5 font-mono text-xs" title={fmtFullTime(l.ts)}>
+      <td className="whitespace-nowrap py-1.5 pr-0.5 font-mono text-xs" title={fmtFullTime(l.ts)}>
         {fmtTime(l.ts)}
       </td>
       <td className="py-1.5 pr-0.5">
-        <Badge variant="secondary" className="max-w-[180px] truncate px-1.5 font-mono">
+        <Badge variant="secondary" className="whitespace-nowrap px-1.5 font-mono">
           {l.model}
         </Badge>
       </td>
       {/* 推理等级:请求携带的 reasoning_effort(minimal/low/medium/high);无则占位 */}
-      <td className="py-1.5 pr-0.5">
+      <td className="whitespace-nowrap py-1.5 pr-0.5">
         {l.tag ? (
           <Badge variant="outline" className="px-1.5">
             {l.tag}
@@ -373,14 +376,13 @@ function LogRow({
         )}
       </td>
       <td className="py-1.5 pr-0.5 text-sm">
-        <span className="inline-flex items-center gap-1">
+        <span className="inline-flex items-center gap-1 whitespace-nowrap">
           {channelIcon &&
             (channelIcon.startsWith("data:image/") ? (
               <img src={channelIcon} alt="" className="h-4 w-4 object-contain" />
             ) : (
               <span className="text-sm leading-none">{channelIcon}</span>
             ))}
-          <span className="h-1.5 w-1.5 rounded-full bg-primary/60" />
           {l.channelName ?? "—"}
           {attemptCount > 1 && (
             <Badge variant="warning" className="px-1 text-[10px]">
@@ -389,37 +391,42 @@ function LogRow({
           )}
         </span>
       </td>
-      <td className="py-1.5 pr-0.5 font-mono text-xs leading-5">
-        <div className="flex items-center justify-center gap-3">
-          <span
-            className="text-orange-500"
-            title={`总输入 ${fmtK(l.promptTokens)}(含缓存)`}
-          >
+      <td className="whitespace-nowrap py-1.5 pr-0.5 font-mono text-xs leading-5">
+        {/* 第一行:输入/输出;第二行:缓存命中/命中率。图标统一 h-3 w-3 与
+            Database 同尺寸,输入↔命中、输出↔命中率左右对齐(两组各占同宽列);
+            gap-x-2.5:输入列与输出列之间一档间隔(10px) */}
+        <div className="mx-auto grid w-fit grid-cols-[auto_auto] gap-x-2.5 gap-y-0.5">
+          <span className="flex items-center gap-0.5" title={`总输入 ${fmtK(l.promptTokens)}(含缓存)`}>
             {/* 差值夹 0:上游 usage 可能出现 prompt < cache_read+write 的异常数据 */}
-            ↑{fmtK(Math.max(0, l.promptTokens - l.cacheRead - l.cacheWrite))}
+            <ArrowUp className="h-3 w-3 shrink-0 text-orange-500" />
+            <span className="text-orange-500">
+              {fmtK(Math.max(0, l.promptTokens - l.cacheRead - l.cacheWrite))}
+            </span>
           </span>
-          <span className="text-violet-500" title={`总输出 ${fmtK(l.completionTokens)}`}>
-            ↓{fmtK(l.completionTokens)}
+          <span className="flex items-center gap-0.5" title={`总输出 ${fmtK(l.completionTokens)}`}>
+            <ArrowDown className="h-3 w-3 shrink-0 text-violet-500" />
+            <span className="text-violet-500">{fmtK(l.completionTokens)}</span>
           </span>
-        </div>
-        <div className="flex items-center justify-center gap-1 text-muted-foreground">
-          <Database className="h-3 w-3" />
-          <span className="text-emerald-500" title="缓存命中词元">
-            {fmtK(l.cacheRead)}
+          <span className="flex items-center gap-0.5" title="缓存命中词元">
+            <Database className="h-3 w-3 shrink-0 text-emerald-500" />
+            <span className="text-emerald-500">{fmtK(l.cacheRead)}</span>
           </span>
           {/* 命中率与命中量同色:同一语义(缓存命中)保持视觉一致 */}
-          <span className="text-emerald-500">
-            {cacheHitRate(l.cacheRead, l.promptTokens)}
+          <span className="flex items-center gap-0.5">
+            <Percent className="h-3 w-3 shrink-0 text-emerald-500" />
+            <span className="text-emerald-500">
+              {cacheHitRate(l.cacheRead, l.promptTokens)}
+            </span>
           </span>
         </div>
       </td>
       {/* 任务耗时:单元格保持左对齐;首字/生成耗时按快慢分档着色;非流式整块淡色 */}
-      <td className={cn("py-1.5 pr-0.5 text-left font-mono text-xs leading-4", !l.isStream && "text-muted-foreground")}>
+      <td className={cn("whitespace-nowrap py-1.5 pr-0.5 text-left font-mono text-xs leading-4", !l.isStream && "text-muted-foreground")}>
         <div>
           <div className="flex items-center gap-1.5">
             <span className="h-3 w-0.5 shrink-0 rounded-full bg-zinc-400" />
             <span className="text-muted-foreground">首字</span>
-            <span className={latencyColor(l.ttftMs, [5000, 10000, 20000, 40000])}>
+            <span className={latencyColor(l.ttftMs, [5000, 15000])}>
               {l.isStream ? fmtMs(l.ttftMs) : "—"}
             </span>
           </div>
@@ -428,13 +435,14 @@ function LogRow({
             <span className="text-muted-foreground">耗时</span>
             {/* 生成耗时 = 总耗时 − 首字(流式,夹 0);非流式直接评总耗时。
                 流式结合输出速度取较轻档:120s 出 12K 词元是健康长生成,
-                不应仅因时长被判红 */}
+                不应仅因时长被判红。
+                阈值:20s 内绿;20~60s 橙;≥60s 红 */}
             <span
               className={durationColor(
                 l.isStream && l.ttftMs != null
                   ? Math.max(0, (l.totalMs ?? 0) - l.ttftMs)
                   : l.totalMs,
-                [15000, 30000, 60000, 120000],
+                [20000, 60000],
                 { isStream: l.isStream, completionTokens: l.completionTokens },
               )}
             >
@@ -451,7 +459,7 @@ function LogRow({
           </div>
         </div>
       </td>
-      <td className="py-1.5 pr-0.5 font-mono text-xs">
+      <td className="whitespace-nowrap py-1.5 pr-0.5 font-mono text-xs">
         {l.cost != null && (
           <span title={l.estimated ? "usage 为本地估算" : undefined}>
             {l.estimated ? "~" : ""}
@@ -460,10 +468,10 @@ function LogRow({
         )}
         {l.cost == null && <span className="text-muted-foreground">—</span>}
       </td>
-      <td className="py-1.5 pr-0.5">
+      <td className="whitespace-nowrap py-1.5 pr-0.5">
         <StatusCell status={l.status} />
       </td>
-      <td className="py-1.5 pr-0.5">
+      <td className="whitespace-nowrap py-1.5 pr-0.5">
         {l.keyName ? (
           <Badge variant="outline" className="px-1.5">
             {l.keyName}
@@ -473,7 +481,7 @@ function LogRow({
         )}
       </td>
       <td
-        className="max-w-[110px] truncate py-1.5 pr-0.5 text-xs text-muted-foreground"
+        className="whitespace-nowrap py-1.5 pr-0.5 text-xs text-muted-foreground"
         title={l.client ?? undefined}
       >
         {clientDisplay ? (
@@ -483,13 +491,17 @@ function LogRow({
             ) : (
               clientIcon && <span className="text-sm leading-none">{clientIcon}</span>
             )}
-            <span className="truncate">{clientDisplay}</span>
+            <span>{clientDisplay}</span>
           </span>
         ) : (
           "—"
         )}
       </td>
-      <td className="py-1.5">
+      {/* 操作列 sticky 固定右侧:横向滚动时始终可点。
+          背景必须不透明(纯 bg-card,不跟随行 hover)——半透明底色会让横向
+          滚动时从它下面穿过的单元格文字透出来。
+          z-index 用 1(低于 thead 的 z-10):否则纵向滚动时行内容会盖住表头 */}
+      <td className="sticky right-0 z-[1] whitespace-nowrap border-l bg-card py-1.5 pl-1">
         <Button variant="ghost" size="sm" onClick={onDetail}>
           详情
         </Button>
@@ -678,7 +690,7 @@ export function DashboardPage() {
           // 有美元定价消耗时在副行分列展示;两种币种互不换算
           hint={
             stats && stats.totalCostUsd > 0
-              ? `美元消耗 ${fmtUsd(stats.totalCostUsd)} · 按定价表计`
+              ? fmtUsd(stats.totalCostUsd)
               : "按定价表计,含缓存"
           }
         />
@@ -746,21 +758,29 @@ export function DashboardPage() {
               </p>
             </div>
           ) : (
-            <table className="w-full min-w-[1100px] text-sm">
+            <table className="w-full min-w-[1040px] text-sm">
               <thead className="sticky top-0 z-10 bg-card">
-                {/* 任务耗时列特殊:内容与表头均左对齐(竖条锚点行),其余列居中 */}
+                {/* 列宽策略:auto 布局 + 所有单元格 whitespace-nowrap,浏览器会把
+                    每列压到"内容最小完整显示宽度"——低于此宽度表格自己就会溢出
+                    滚动,不会挤压或截断内容。不再给列设固定百分比/max-w 限制,
+                    那些约束会在容器宽度不足时把列压变形。
+                    任务耗时列内容与表头均左对齐(竖条锚点行),其余居中。
+                    操作列 sticky right-0:横向滚动时钉在右侧始终可点,
+                    故需自带不透明背景(否则滚动内容会透上来) */}
                 <tr className="border-b text-center text-xs text-muted-foreground">
-                  <th className="py-2 pr-0.5 font-medium">时间</th>
-                  <th className="py-2 pr-0.5 font-medium">模型</th>
-                  <th className="py-2 pr-0.5 font-medium">推理</th>
-                  <th className="py-2 pr-0.5 font-medium">渠道</th>
-                  <th className="py-2 pr-0.5 font-medium">词元</th>
-                  <th className="py-2 pr-0.5 text-left font-medium">任务耗时</th>
-                  <th className="py-2 pr-0.5 font-medium">费用</th>
-                  <th className="py-2 pr-0.5 font-medium">状态</th>
-                  <th className="py-2 pr-0.5 font-medium">密钥</th>
-                  <th className="py-2 pr-0.5 font-medium">客户端</th>
-                  <th className="py-2 font-medium">操作</th>
+                  <th className="whitespace-nowrap py-2 pr-0.5 font-medium">时间</th>
+                  <th className="whitespace-nowrap py-2 pr-0.5 font-medium">模型</th>
+                  <th className="whitespace-nowrap py-2 pr-0.5 font-medium">推理</th>
+                  <th className="whitespace-nowrap py-2 pr-0.5 font-medium">渠道</th>
+                  <th className="whitespace-nowrap py-2 pr-0.5 font-medium">词元</th>
+                  <th className="whitespace-nowrap py-2 pr-0.5 text-left font-medium">任务耗时</th>
+                  <th className="whitespace-nowrap py-2 pr-0.5 font-medium">费用</th>
+                  <th className="whitespace-nowrap py-2 pr-0.5 font-medium">状态</th>
+                  <th className="whitespace-nowrap py-2 pr-0.5 font-medium">密钥</th>
+                  <th className="whitespace-nowrap py-2 pr-0.5 font-medium">客户端</th>
+                  <th className="sticky right-0 z-10 whitespace-nowrap border-l bg-card py-2 pl-1 font-medium">
+                    操作
+                  </th>
                 </tr>
               </thead>
               <tbody>

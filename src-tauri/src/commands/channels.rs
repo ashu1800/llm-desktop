@@ -103,10 +103,18 @@ pub async fn test_channel(
     let content = prompt
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "hi".to_string());
-    let model_name = model
+    // 对外名:用户测试时选的/渠道白名单首个。发上游前必须过映射——
+    // 否则配了「对外名 → 上游名」的渠道会拿对外名去打上游,必然 404,
+    // 而真实数据面请求是通的,测试结果会误导用户以为渠道坏了
+    let model_in = model
         .filter(|s| !s.trim().is_empty())
         .or_else(|| ch.models.first().cloned())
         .unwrap_or_else(|| "gpt-4o-mini".to_string());
+    let model_name = ch
+        .model_map
+        .get(&model_in)
+        .cloned()
+        .unwrap_or_else(|| model_in.clone());
 
     // 按协议构造非流式对话请求(非流式解析简单,兼容性最好)
     let (url, body) = match ch.protocol {
@@ -177,7 +185,7 @@ pub async fn test_channel(
             message: format!("HTTP {status}: {}", crate::util::truncate_utf8(&resp_body, 200)),
             ttft_ms: Some(ttft),
             reply: None,
-            model: Some(model_name),
+            model: Some(model_in),
             completion_tokens: None,
         });
     }
@@ -230,21 +238,135 @@ pub async fn test_channel(
         message: format!("对话测试成功({total}ms)"),
         ttft_ms: Some(ttft),
         reply,
-        model: v["model"].as_str().map(str::to_string).or(Some(model_name)),
+        // 回显对外名(用户选的):上游回包里的 model 是映射后的名字,
+        // 展示它会让用户困惑"我测的不是这个模型"
+        model: Some(model_in),
         completion_tokens,
     })
 }
 
-fn test_client(state: &State<'_, AppState>, ch: &Channel) -> Result<reqwest::Client, String> {
-    // 与数据面 http_client 同规则:proxy:<name> 引用命名代理,发请求时解析
-    let resolved: Option<String> = match ch.proxy.as_deref() {
+/// 解析渠道/命令的代理配置为实际代理 URL。
+///
+/// 三态语义(与数据面 http_client 一致,靠 Option 的两层区分):
+/// - `None`   = 跟随系统代理
+/// - `Some("")` = 强制直连(no_proxy)
+/// - `Some(url)` = 用该 URL
+///
+/// `proxy:<name>` 形式引用设置页「代理管理」里的命名代理,发请求时才解析成 URL
+/// (改名/改地址即时生效,不必改渠道)。引用不到时回退 None(跟随系统),
+/// 而不是当作直连——那样用户以为在用代理、实际裸连,更危险。
+fn resolve_channel_proxy(state: &AppState, proxy: Option<&str>) -> Option<String> {
+    match proxy {
         Some(p) if p.starts_with("proxy:") => {
             let name = &p[6..];
-            let settings = state.current_settings();
-            settings.proxies.iter().find(|e| e.name == name).map(|e| e.url.clone())
+            state
+                .current_settings()
+                .proxies
+                .iter()
+                .find(|e| e.name == name)
+                .map(|e| e.url.clone())
         }
         other => other.map(str::to_string),
+    }
+}
+
+/// 拉取上游支持的模型列表(渠道编辑"获取模型"按钮)。
+/// 三协议:openai GET /v1/models;anthropic GET /v1/models(x-api-key);
+/// gemini GET /v1beta/models(x-goog-api-key)。返回排序去重的模型 id
+#[tauri::command]
+pub async fn fetch_upstream_models(
+    state: State<'_, AppState>,
+    base_url: String,
+    protocol: crate::proto::UpstreamProto,
+    api_key: String,
+    proxy: Option<String>,
+) -> Result<Vec<String>, String> {
+    let base = base_url.trim();
+    if base.is_empty() {
+        return Err("请先填写 Base URL".into());
+    }
+    if api_key.trim().is_empty() {
+        return Err("请先填写至少一个 API Key".into());
+    }
+    let url = match protocol {
+        crate::proto::UpstreamProto::OpenAi | crate::proto::UpstreamProto::Anthropic => {
+            crate::util::join_base(base, "/v1/models")
+        }
+        crate::proto::UpstreamProto::Gemini => crate::util::join_base(base, "/v1beta/models"),
     };
+    let resolved = resolve_channel_proxy(&state, proxy.as_deref());
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(15))
+        .user_agent(concat!("LLM-Gateway/", env!("CARGO_PKG_VERSION")));
+    builder = match resolved.as_deref() {
+        None => builder,
+        Some("") => builder.no_proxy(),
+        Some(url) => builder.proxy(reqwest::Proxy::all(url).map_err(|e| e.to_string())?),
+    };
+    let client = builder.build().map_err(|e| e.to_string())?;
+
+    let mut req = client.get(&url);
+    match protocol {
+        crate::proto::UpstreamProto::OpenAi => req = req.bearer_auth(api_key.trim()),
+        crate::proto::UpstreamProto::Anthropic => {
+            req = req
+                .header("x-api-key", api_key.trim())
+                .header("anthropic-version", "2023-06-01");
+        }
+        crate::proto::UpstreamProto::Gemini => {
+            req = req.header("x-goog-api-key", api_key.trim());
+        }
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {e}"))?;
+    let status = resp.status().as_u16();
+    let body = resp.text().await.unwrap_or_default();
+    if !(200..300).contains(&status) {
+        return Err(format!(
+            "HTTP {status}: {}",
+            crate::util::truncate_utf8(&body, 200)
+        ));
+    }
+    let v: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|_| "响应不是合法 JSON".to_string())?;
+    // openai/anthropic:{data:[{id}]};gemini:{models:[{name:"models/<id>"}]}
+    let mut models: Vec<String> = match protocol {
+        crate::proto::UpstreamProto::Gemini => v["models"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| m["name"].as_str())
+                    .filter_map(|n| n.rsplit('/').next())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        _ => v["data"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| m["id"].as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+    };
+    if models.is_empty() {
+        return Err("上游返回空模型列表".into());
+    }
+    models.sort();
+    models.dedup();
+    Ok(models)
+}
+
+fn test_client(state: &State<'_, AppState>, ch: &Channel) -> Result<reqwest::Client, String> {
+    // 与数据面 http_client 同规则:命名代理引用在发请求时解析
+    let resolved = resolve_channel_proxy(state, ch.proxy.as_deref());
     // 哨兵区分 None(跟随系统)与 Some("")(直连),与 http_client 同规则
     let cache_key = format!(
         "{}|test",

@@ -14,6 +14,9 @@ use crate::store::api_keys::ApiKey;
 use crate::store::channels::Channel;
 use crate::store::logs::RequestLog;
 
+/// 渠道并发闸门表:(渠道 id, 上限值) → 信号量
+pub type ChannelGates = HashMap<(i64, i64), Arc<tokio::sync::Semaphore>>;
+
 /// 进程级共享状态:配置变更只更新缓存,数据面每请求读取,热生效
 #[derive(Clone)]
 pub struct AppState {
@@ -36,6 +39,9 @@ pub struct AppState {
     pub http: Arc<Mutex<HashMap<String, reqwest::Client>>>,
     /// 渠道密钥池轮询起点
     pub key_counters: Arc<Mutex<HashMap<i64, usize>>>,
+    /// 渠道并发闸门:key = (渠道 id, 上限值)。带上限值做 key 使改配置后自然换新信号量,
+    /// 不必同步回收旧实例(在途请求结束自动释放)
+    pub channel_gates: Arc<Mutex<ChannelGates>>,
     /// 监听生命周期互斥:start/stop/端口切换串行化,避免并发更新句柄丢失
     pub listen_lock: Arc<tokio::sync::Mutex<()>>,
 }
@@ -60,6 +66,7 @@ impl AppState {
             event_tx,
             http: Arc::new(Mutex::new(HashMap::new())),
             key_counters: Arc::new(Mutex::new(HashMap::new())),
+            channel_gates: Arc::new(Mutex::new(HashMap::new())),
             listen_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }

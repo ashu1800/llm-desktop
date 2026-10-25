@@ -68,8 +68,10 @@ pub struct TimeoutDefaults {
 
 impl Default for AppSettings {
     fn default() -> Self {
+        // dev 构建默认 8788:与正式安装版(8787)并行跑互不抢端口。
+        // 仅影响"DB 无设置记录"的首次默认;dev 用户显式保存过设置则按保存值
         Self {
-            port: 8787,
+            port: if cfg!(debug_assertions) { 8788 } else { 8787 },
             listen_addr: "127.0.0.1".into(),
             autostart: false,
             silent_start: false,
@@ -210,7 +212,9 @@ mod tests {
     #[test]
     fn default_values_match_prd() {
         let s = AppSettings::default();
-        assert_eq!(s.port, 8787);
+        // dev 构建(debug)默认 8788 避让正式版;正式默认 8787
+        let expected_port = if cfg!(debug_assertions) { 8788 } else { 8787 };
+        assert_eq!(s.port, expected_port);
         assert_eq!(s.listen_addr, "127.0.0.1");
         assert!(s.close_to_tray);
         assert_eq!(s.log_retention_days, 90);

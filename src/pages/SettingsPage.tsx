@@ -12,7 +12,6 @@ import { cn } from "@/lib/utils";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -40,13 +39,11 @@ import {
 
 function NumberField({
   label,
-  desc,
   value,
   onChange,
   suffix,
 }: {
   label: string;
-  desc?: string;
   value: number;
   onChange: (v: number) => void;
   suffix?: string;
@@ -75,28 +72,22 @@ function NumberField({
           <span className="text-xs text-muted-foreground">{suffix}</span>
         )}
       </div>
-      {desc && <p className="text-xs text-muted-foreground">{desc}</p>}
     </div>
   );
 }
 
 function ToggleField({
   label,
-  desc,
   checked,
   onChange,
 }: {
   label: string;
-  desc?: string;
   checked: boolean;
   onChange: (v: boolean) => void;
 }) {
   return (
     <div className="flex items-start justify-between gap-4 py-1">
-      <div className="space-y-1">
-        <Label>{label}</Label>
-        {desc && <p className="text-xs text-muted-foreground">{desc}</p>}
-      </div>
+      <Label>{label}</Label>
       <Switch checked={checked} onCheckedChange={onChange} />
     </div>
   );
@@ -104,18 +95,15 @@ function ToggleField({
 
 function SectionCard({
   title,
-  description,
   children,
 }: {
   title: string;
-  description?: string;
   children: React.ReactNode;
 }) {
   return (
     <Card>
       <CardHeader className="pb-4">
         <CardTitle className="text-base">{title}</CardTitle>
-        {description && <CardDescription>{description}</CardDescription>}
       </CardHeader>
       <CardContent className="space-y-4">{children}</CardContent>
     </Card>
@@ -276,16 +264,12 @@ export function SettingsPage() {
       <div className="space-y-6">
         {tab === "gateway" && (
           <>
-            <SectionCard
-              title="服务监听"
-              description="数据面 axum 服务配置;修改端口保存后立即热重启监听,无需重启应用。"
-            >
+            <SectionCard title="服务监听">
               <div className="grid gap-4 sm:grid-cols-2">
                 <NumberField
                   label="端口"
                   value={form.port}
                   onChange={(v) => patch({ port: v })}
-                  desc="保存前自动检测占用,冲突将拒绝保存"
                 />
                 <div className="space-y-1.5">
                   <Label>监听地址</Label>
@@ -312,10 +296,7 @@ export function SettingsPage() {
               </div>
             </SectionCard>
 
-            <SectionCard
-              title="熔断全局默认参数"
-              description="渠道可单独覆盖;滑动窗口内连续失败达到阈值,或样本足够且失败率超阈值时熔断打开。"
-            >
+            <SectionCard title="熔断全局默认参数">
               <div className="grid gap-4 sm:grid-cols-3">
                 <NumberField
                   label="滑动窗口"
@@ -346,7 +327,6 @@ export function SettingsPage() {
                   value={form.breaker.cooldownSecs}
                   onChange={(v) => patchBreaker({ cooldownSecs: v })}
                   suffix="秒"
-                  desc="连续熔断按 60→120→240 指数退避"
                 />
                 <NumberField
                   label="退避上限"
@@ -357,10 +337,7 @@ export function SettingsPage() {
               </div>
             </SectionCard>
 
-            <SectionCard
-              title="超时默认值"
-              description="流式请求不设总时长硬顶,仅用空闲超时判定死亡;慢渠道请在渠道级调大首字超时。"
-            >
+            <SectionCard title="超时默认值">
               <div className="grid gap-4 sm:grid-cols-4">
                 <NumberField
                   label="连接"
@@ -396,19 +373,16 @@ export function SettingsPage() {
             <SectionCard title="系统集成">
               <ToggleField
                 label="开机自启"
-                desc="写入注册表 Run 项,启动参数附带 --silent(强制静默进托盘)"
                 checked={form.autostart}
                 onChange={(v) => patch({ autostart: v })}
               />
               <ToggleField
                 label="启动时最小化到托盘"
-                desc="启动不弹窗口,仅托盘运行"
                 checked={form.silentStart}
                 onChange={(v) => patch({ silentStart: v })}
               />
               <ToggleField
                 label="关闭窗口时隐藏到托盘"
-                desc="关闭 = 隐藏并保持代理运行;关闭后代理服务继续转发请求。关闭此开关则点关闭按钮直接退出程序"
                 checked={form.closeToTray}
                 onChange={(v) => patch({ closeToTray: v })}
               />
@@ -436,19 +410,13 @@ export function SettingsPage() {
         )}
 
         {tab === "proxy" && (
-          <SectionCard
-            title="代理管理"
-            description="命名代理池:供上游渠道与 GitHub 更新引用,支持 socks5 与 http/https。"
-          >
+          <SectionCard title="代理管理">
             <ProxySettings form={form} patch={patch} />
           </SectionCard>
         )}
 
         {tab === "client" && (
-          <SectionCard
-            title="客户端映射"
-            description="自定义请求日志中客户端的显示名称与图标。"
-          >
+          <SectionCard title="客户端映射">
             <ClientMappingSettings form={form} patch={patch} />
           </SectionCard>
         )}
@@ -462,13 +430,11 @@ export function SettingsPage() {
                   value={form.logRetentionDays}
                   onChange={(v) => patch({ logRetentionDays: v })}
                   suffix="天"
-                  desc="每日凌晨自动清理过期日志"
                 />
                 <div className="space-y-1.5">
                   <Label>完整报文保存</Label>
                   <ToggleField
                     label="保存完整请求/响应体"
-                    desc="默认各截断 32KB;开启后完整保存(占用更多磁盘)"
                     checked={form.saveFullBody}
                     onChange={(v) => patch({ saveFullBody: v })}
                   />
@@ -476,10 +442,7 @@ export function SettingsPage() {
               </div>
             </SectionCard>
 
-            <SectionCard
-              title="配置导入 / 导出"
-              description="导出 JSON(渠道 + 密钥 + 定价 + 设置,含明文密钥,请妥善保管;日志不导出)。导入为整表替换并立即热生效。"
-            >
+            <SectionCard title="配置导入 / 导出">
               <div className="flex flex-wrap gap-2">
                 <Button
                   variant="outline"
@@ -508,10 +471,7 @@ export function SettingsPage() {
         )}
 
         {tab === "about" && (
-          <SectionCard
-            title="软件更新"
-            description="检查 GitHub Releases 上的新版本;下载后经 minisign 签名校验安装,重启即完成更新。"
-          >
+          <SectionCard title="软件更新">
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <div className="text-sm">

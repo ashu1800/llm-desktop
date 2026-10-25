@@ -92,3 +92,43 @@
 ::-webkit-scrollbar-corner {
   background: transparent;
 }
+
+/* number input 原生上下箭头(spinner):WebView2 深色下渲染为亮色方块与主题不搭,
+   隐藏之——数值仍可手输/滚轮/上下键调节 */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* 极速档(≥150 t/s)彩虹渐变文字:用背景裁切到文字实现,与绿/橙/红三档
+   纯色形成"超出档位"的视觉区分。fallback:浏览器不支持 background-clip:text
+   时文字透明不可见,故 @supports 外先给纯绿兜底 */
+.rainbow-text {
+  color: hsl(var(--success));
+}
+@supports (background-clip: text) or (-webkit-background-clip: text) {
+  .rainbow-text {
+    background-image: linear-gradient(
+      90deg,
+      #10b981 0%,
+      #06b6d4 20%,
+      #6366f1 40%,
+      #a855f7 60%,
+      #ec4899 80%,
+      #f59e0b 100%
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    /* 深色下渐变偏亮已够对比;浅色下加深一档避免糊在白底上 */
+    filter: saturate(1.15) brightness(0.92);
+  }
+  .dark .rainbow-text {
+    filter: saturate(1.2) brightness(1.08);
+  }
+}

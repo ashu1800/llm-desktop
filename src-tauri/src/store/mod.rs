@@ -52,7 +52,8 @@ mod tests {
         let s = crate::settings::AppSettings::default();
         crate::store::settings::save(&pool, &s).await.unwrap();
         let loaded = crate::store::settings::load(&pool).await.unwrap();
-        assert_eq!(loaded.port, 8787);
+        // 端口断言跟随默认值(dev/debug 构建 8788,正式 8787)
+        assert_eq!(loaded.port, s.port);
         assert_eq!(loaded.breaker.consecutive_failures, 5);
 
         drop(pool);
@@ -82,6 +83,7 @@ mod tests {
             api_keys: vec!["sk-up-1".into(), "sk-up-2".into()],
             enabled: true,
             proxy: None,
+            max_concurrency: Some(8),
             models: vec!["gpt-4o".into()],
             model_map: [("gpt".into(), "gpt-4o".into())].into_iter().collect(),
             timeout_override: None,
@@ -99,6 +101,7 @@ mod tests {
         assert_eq!(listed[0].api_keys.len(), 2);
         assert_eq!(listed[0].model_map.get("gpt").unwrap(), "gpt-4o");
         assert_eq!(listed[0].icon, "🤖");
+        assert_eq!(listed[0].max_concurrency, Some(8));
 
         ch.name = "改名".into();
         crate::store::channels::update(&pool, &ch).await.unwrap();

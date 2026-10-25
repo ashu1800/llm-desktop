@@ -8,6 +8,7 @@ import {
   Pencil,
   Plus,
   Power,
+  RefreshCw,
   RotateCcw,
   Trash2,
   Zap,
@@ -48,9 +49,10 @@ import {
 import { cn } from "@/lib/utils";
 
 const PROTOCOL_PLACEHOLDER: Record<UpstreamProto, string> = {
-  openai: "https://api.openai.com 或中转站地址(不带 /v1)",
-  anthropic: "https://api.anthropic.com",
-  gemini: "https://generativelanguage.googleapis.com",
+  // /v1、/v1beta 版本前缀带不带都行,网关按协议自动补全去重
+  openai: "https://api.openai.com 或中转站地址(/v1 可带可不带)",
+  anthropic: "https://api.anthropic.com(/v1 可带可不带)",
+  gemini: "https://generativelanguage.googleapis.com(/v1beta 可带可不带)",
 };
 
 function emptyChannel(): Channel {
@@ -62,6 +64,7 @@ function emptyChannel(): Channel {
     apiKeys: [""],
     enabled: true,
     proxy: null,
+    maxConcurrency: null,
     models: [],
     modelMap: {},
     timeoutOverride: null,
@@ -87,65 +90,6 @@ function breakerBadge(
       <Badge variant="destructive">熔断中 {breaker.remainingSecs}s</Badge>
     );
   return <Badge variant="warning">冷却探测中</Badge>;
-}
-
-// ---------- 模型映射键值对编辑器 ----------
-
-function ModelMapEditor({
-  value,
-  onChange,
-}: {
-  value: Record<string, string>;
-  onChange: (v: Record<string, string>) => void;
-}) {
-  const entries = Object.entries(value);
-  return (
-    <div className="space-y-1.5">
-      {entries.map(([k, v], i) => (
-        <div key={i} className="flex items-center gap-2">
-          <Input
-            value={k}
-            placeholder="入站模型名"
-            className="flex-1"
-            onChange={(e) => {
-              const next = { ...value };
-              delete next[k];
-              next[e.target.value] = v;
-              onChange(next);
-            }}
-          />
-          <span className="text-xs text-muted-foreground">→</span>
-          <Input
-            value={v}
-            placeholder="上游模型名"
-            className="flex-1"
-            onChange={(e) => onChange({ ...value, [k]: e.target.value })}
-          />
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => {
-              const next = { ...value };
-              delete next[k];
-              onChange(next);
-            }}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      ))}
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={() => onChange({ ...value, "": "" })}
-      >
-        <Plus className="h-3.5 w-3.5" /> 添加映射
-      </Button>
-      <p className="text-xs text-muted-foreground">
-        入站模型名 → 上游模型名,精确匹配;未命中则原样透传
-      </p>
-    </div>
-  );
 }
 
 // ---------- 计费倍率规则编辑器 ----------
@@ -265,6 +209,285 @@ function RateRuleEditor({
   );
 }
 
+// ---------- 支持的模型(白名单 + 映射合一) ----------
+//
+// 语义上"支持的模型"与"模型白名单"是同一份数据:前者是模型名集合,
+// 后者在集合基础上加了「对外名 → 上游名」的可选映射。故合并成一张表,
+// 对外模型名即白名单条目,上游模型名留空 = 同名透传。
+// 存储仍分离(models / modelMap),避免破坏后端与历史数据。
+
+/** 行模型:对外名 + 可选上游名 */
+type ModelRow = { out: string; up: string };
+
+/** models + modelMap → 表格行 */
+function toRows(models: string[], modelMap: Record<string, string>): ModelRow[] {
+  const rows: ModelRow[] = models.map((m) => ({
+    out: m,
+    up: modelMap[m] && modelMap[m] !== m ? modelMap[m] : "",
+  }));
+  // modelMap 里有但 models 漏了的条目(历史数据/导入)也要显示,否则会静默丢失
+  for (const [k, v] of Object.entries(modelMap)) {
+    if (!models.includes(k) && k !== "") rows.push({ out: k, up: v });
+  }
+  return rows;
+}
+
+/** 表格行 → models + modelMap(对外名空的行丢弃) */
+function fromRows(rows: ModelRow[]): {
+  models: string[];
+  modelMap: Record<string, string>;
+} {
+  const models: string[] = [];
+  const modelMap: Record<string, string> = {};
+  for (const r of rows) {
+    const out = r.out.trim();
+    if (!out || models.includes(out)) continue;
+    models.push(out);
+    const up = r.up.trim();
+    // 上游名与对外名相同则不必存映射(等价于透传)
+    if (up && up !== out) modelMap[out] = up;
+  }
+  return { models, modelMap };
+}
+
+function ModelsField({
+  models,
+  modelMap,
+  onChange,
+  baseUrl,
+  protocol,
+  apiKey,
+  proxy,
+}: {
+  models: string[];
+  modelMap: Record<string, string>;
+  onChange: (v: { models: string[]; modelMap: Record<string, string> }) => void;
+  baseUrl: string;
+  protocol: UpstreamProto;
+  apiKey: string;
+  proxy: string | null;
+}) {
+  const rows = toRows(models, modelMap);
+  // 上游拉到的全量候选(勾选来源)
+  const [candidates, setCandidates] = useState<string[] | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [fetching, setFetching] = useState(false);
+  // 弹窗内勾选草稿:确认才写回,取消丢弃
+  const [draft, setDraft] = useState<string[]>([]);
+  const [filter, setFilter] = useState("");
+
+  // 已覆盖的模型名(对外名与上游名都算命中,避免重复添加同义条目)
+  const known = new Set<string>([
+    ...models,
+    ...Object.values(modelMap).filter(Boolean),
+  ]);
+
+  const commit = (next: ModelRow[]) => onChange(fromRows(next));
+
+  const patchRow = (i: number, patch: Partial<ModelRow>) => {
+    commit(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  };
+
+  const removeRow = (i: number) => commit(rows.filter((_, j) => j !== i));
+
+  const fetchModels = async () => {
+    setFetching(true);
+    try {
+      const list = await api.fetchUpstreamModels({
+        baseUrl,
+        protocol,
+        apiKey,
+        proxy,
+      });
+      setCandidates(list);
+      setDraft(list.filter((m) => known.has(m)));
+      setPickerOpen(true);
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  const openPicker = () => {
+    if (candidates) {
+      // 已拉取过:直接开弹窗(候选已含上次结果)
+      setDraft(candidates.filter((m) => known.has(m)));
+      setPickerOpen(true);
+    } else {
+      fetchModels();
+    }
+  };
+
+  const confirmPick = () => {
+    // 保留未勾选的既有条目(手填的、上游已下线的),只按勾选增删候选部分
+    const cand = candidates ?? [];
+    const extras = rows.filter((r) => !cand.includes(r.out) && !cand.includes(r.up));
+    // 勾选顺序即行序;上游名留空由用户后续按需填
+    const picked: ModelRow[] = draft.map((m) => {
+      const hit = rows.find((r) => r.out === m || r.up === m);
+      return hit ?? { out: m, up: "" };
+    });
+    commit([...picked, ...extras]);
+    setPickerOpen(false);
+  };
+
+  const toggleDraft = (m: string) => {
+    setDraft((d) => (d.includes(m) ? d.filter((x) => x !== m) : [...d, m]));
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <Label>
+          支持的模型
+          <span className="ml-1 text-muted-foreground">
+            (留空 = 不限制;上游模型名留空 = 同名透传)
+          </span>
+        </Label>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 gap-1 px-2 text-xs"
+          disabled={fetching || !baseUrl.trim() || !apiKey.trim()}
+          title={
+            !baseUrl.trim() || !apiKey.trim()
+              ? "需先填写 Base URL 和 API Key"
+              : undefined
+          }
+          onClick={openPicker}
+        >
+          {fetching ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <RefreshCw className="h-3 w-3" />
+          )}
+          从上游获取
+        </Button>
+      </div>
+
+      {rows.length > 0 && (
+        <>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="flex-1">对外模型名</span>
+            <span className="w-4" />
+            <span className="flex-1">上游模型名</span>
+            <span className="w-9" />
+          </div>
+          {rows.map((r, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <Input
+                value={r.out}
+                placeholder="对外模型名"
+                className="flex-1 font-mono"
+                onChange={(e) => patchRow(i, { out: e.target.value })}
+              />
+              <span className="w-4 text-center text-xs text-muted-foreground">
+                →
+              </span>
+              <Input
+                value={r.up}
+                placeholder="留空 = 同名透传"
+                className="flex-1 font-mono"
+                onChange={(e) => patchRow(i, { up: e.target.value })}
+              />
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 shrink-0 text-muted-foreground hover:text-destructive"
+                title="删除此模型"
+                onClick={() => removeRow(i)}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          ))}
+        </>
+      )}
+
+      <div className="flex items-center justify-between">
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 gap-1 px-2 text-xs"
+          onClick={() => commit([...rows, { out: "", up: "" }])}
+        >
+          <Plus className="h-3.5 w-3.5" /> 添加一行
+        </Button>
+        {rows.length > 0 && (
+          <span className="text-xs text-muted-foreground">
+            共 {rows.length} 条
+          </span>
+        )}
+      </div>
+
+      <p className="text-xs text-muted-foreground">
+        {rows.length === 0
+          ? "留空 = 不限制,任何模型都路由到此渠道"
+          : "仅列表内模型命中;上游模型名留空则按同名转发到上游"}
+      </p>
+
+      {/* 模型选择弹窗:全量候选滚动勾选,含全选/反选与筛选 */}
+      <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
+        <DialogContent className="flex max-h-[70vh] flex-col">
+          <DialogHeader>
+            <DialogTitle>选择支持的模型</DialogTitle>
+            <DialogDescription>
+              共 {candidates?.length ?? 0} 个,已选 {draft.length} 个;确认后写入上表
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={() =>
+                setDraft(
+                  draft.length === candidates?.length
+                    ? []
+                    : [...(candidates ?? [])],
+                )
+              }
+            >
+              {draft.length === candidates?.length ? "取消全选" : "全选"}
+            </Button>
+            <Input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="筛选模型名…"
+              className="h-7 flex-1 font-mono text-xs"
+            />
+          </div>
+          <div className="min-h-0 flex-1 space-y-0.5 overflow-auto rounded-md border p-2">
+            {(candidates ?? [])
+              .filter((m) => m.toLowerCase().includes(filter.toLowerCase()))
+              .map((m) => (
+                <label
+                  key={m}
+                  className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-xs hover:bg-accent/50"
+                >
+                  <input
+                    type="checkbox"
+                    checked={draft.includes(m)}
+                    onChange={() => toggleDraft(m)}
+                    className="h-3.5 w-3.5 accent-primary"
+                  />
+                  <span className="font-mono">{m}</span>
+                </label>
+              ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPickerOpen(false)}>
+              取消
+            </Button>
+            <Button onClick={confirmPick}>确定</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
 // ---------- 渠道编辑 Dialog ----------
 
 function ChannelDialog({
@@ -322,72 +545,49 @@ function ChannelDialog({
       <DialogContent className="max-h-[85vh] max-w-2xl overflow-auto">
         <DialogHeader>
           <DialogTitle>{form.id === 0 ? "新建渠道" : "编辑渠道"}</DialogTitle>
-          <DialogDescription>
-            上游中转站配置;API Key 本地明文存储,列表中掩码显示
-          </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label>名称</Label>
               <div className="flex items-center gap-2">
-                {/* 图标预览:emoji/图片渲染,空显示首字符占位 */}
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-muted/40 text-lg leading-none">
-                  {form.icon ? (
-                    isImageIcon ? (
-                      <img src={form.icon} alt="" className="h-full w-full object-contain" />
-                    ) : (
-                      <span>{form.icon}</span>
-                    )
+                {/* 图标按钮:三态——图片(dataURL 预览,点击移除)/存量 emoji(字面显示,
+                    点选图覆盖)/空(ImagePlus 占位,点击选图) */}
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-9 w-9 shrink-0 overflow-hidden p-0 text-base leading-none"
+                  title={
+                    isImageIcon
+                      ? "移除图片图标"
+                      : form.icon
+                        ? "当前为 emoji 图标,选图将覆盖"
+                        : "选择图片图标"
+                  }
+                  disabled={pickingIcon}
+                  onClick={() => {
+                    if (isImageIcon) {
+                      patch({ icon: "" });
+                    } else {
+                      pickIcon();
+                    }
+                  }}
+                >
+                  {pickingIcon ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : isImageIcon ? (
+                    <img src={form.icon} alt="" className="h-full w-full object-contain" />
+                  ) : form.icon ? (
+                    form.icon
                   ) : (
-                    <span className="text-xs text-muted-foreground">
-                      {form.name.trim().charAt(0).toUpperCase() || "?"}
-                    </span>
+                    <ImagePlus className="h-4 w-4 text-muted-foreground" />
                   )}
-                </div>
+                </Button>
                 <Input
                   value={form.name}
                   onChange={(e) => patch({ name: e.target.value })}
-                  placeholder="例如:主力中转站"
+                  placeholder="例如:主力中转站(可点左侧按钮选图片图标)"
                 />
-              </div>
-              {/* 图标设置:emoji 输入与图片选择互斥,图片优先 */}
-              <div className="flex items-center gap-2">
-                {isImageIcon ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 gap-1 px-2 text-xs"
-                    onClick={() => patch({ icon: "" })}
-                  >
-                    移除图片图标
-                  </Button>
-                ) : (
-                  <>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-7 gap-1 px-2 text-xs"
-                      disabled={pickingIcon}
-                      onClick={pickIcon}
-                    >
-                      {pickingIcon ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      ) : (
-                        <ImagePlus className="h-3 w-3" />
-                      )}
-                      图片
-                    </Button>
-                    <Input
-                      value={form.icon}
-                      onChange={(e) => patch({ icon: e.target.value })}
-                      placeholder="或输入 emoji"
-                      // 粘贴的 dataURL 通常超 4 字符:图片态放开限制整体接纳,
-                      // emoji 态维持 4 字符
-                      maxLength={form.icon.startsWith("data:image/") ? 100_000 : 4}
-                    />
-                  </>
-                )}
               </div>
             </div>
             <div className="space-y-1.5">
@@ -478,9 +678,10 @@ function ChannelDialog({
               <Plus className="h-3.5 w-3.5" /> 添加 Key
             </Button>
           </div>
+          {/* 出站代理 + 并发上限:与截图参考一致的两列布局 */}
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <Label>代理设置</Label>
+              <Label>出站代理</Label>
               <Select
                 value={
                   form.proxy === null
@@ -515,7 +716,7 @@ function ChannelDialog({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="system">跟随系统</SelectItem>
-                  <SelectItem value="direct">直连</SelectItem>
+                  <SelectItem value="direct">直连(不使用代理)</SelectItem>
                   {namedProxies.map((p) => (
                     <SelectItem key={p.name} value={`named:${p.name}`}>
                       {p.name}
@@ -544,129 +745,44 @@ function ChannelDialog({
               )}
             </div>
             <div className="space-y-1.5">
-              <Label>支持的模型(留空 = 不限制,每行一个)</Label>
-              <textarea
-                className="flex min-h-[72px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                value={form.models.join("\n")}
+              <Label>并发上限</Label>
+              <Input
+                type="number"
+                min="1"
+                value={form.maxConcurrency ?? ""}
+                placeholder="不限"
                 onChange={(e) =>
                   patch({
-                    models: e.target.value
-                      .split("\n")
-                      .map((s) => s.trim())
-                      .filter(Boolean),
+                    maxConcurrency:
+                      e.target.value === ""
+                        ? null
+                        : Math.max(1, Number(e.target.value) || 1),
                   })
                 }
-                placeholder={"gpt-4o\nclaude-sonnet-4"}
               />
             </div>
           </div>
+          <ModelsField
+            models={form.models}
+            modelMap={form.modelMap}
+            onChange={(v) => patch({ models: v.models, modelMap: v.modelMap })}
+            baseUrl={form.baseUrl}
+            protocol={form.protocol}
+            apiKey={form.apiKeys.find((k) => k.trim()) ?? ""}
+            proxy={form.proxy}
+          />
           <div className="space-y-1.5">
-            <Label>模型映射</Label>
-            <ModelMapEditor
-              value={form.modelMap}
-              onChange={(v) => patch({ modelMap: v })}
+            <Label>备注</Label>
+            <Input
+              value={form.remark}
+              onChange={(e) => patch({ remark: e.target.value })}
             />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label>熔断参数覆盖(留空跟随全局)</Label>
-              <div className="grid grid-cols-2 gap-2">
-                {(
-                  [
-                    ["windowSecs", "窗口秒"],
-                    ["consecutiveFailures", "连败阈值"],
-                    ["sampleMin", "最小样本"],
-                    ["failureRate", "失败率%"],
-                    ["cooldownSecs", "冷却秒"],
-                    ["backoffMaxSecs", "退避上限秒"],
-                  ] as const
-                ).map(([k, label]) => (
-                  <div key={k} className="flex items-center gap-1">
-                    <span className="w-16 shrink-0 text-xs text-muted-foreground">
-                      {label}
-                    </span>
-                    <Input
-                      type="number"
-                      className="h-8"
-                      // failureRate 存 0~1 小数,显示与输入按百分比刻度(与全局设置页一致):
-                      // 显示 ×100,回写 /100;否则 0.5 会显示成"0.5"被按 0.5% 误读
-                      value={
-                        k === "failureRate"
-                          ? form.breakerOverride?.[k] != null
-                            ? Math.round((form.breakerOverride[k] as number) * 100)
-                            : ""
-                          : ((form.breakerOverride?.[k] ?? "") as unknown as number)
-                      }
-                      onChange={(e) => {
-                        const raw = e.target.value;
-                        const ov = { ...(form.breakerOverride ?? {}) };
-                        if (raw === "") delete ov[k];
-                        else
-                          ov[k] = k === "failureRate"
-                            ? Number(raw) / 100
-                            : Number(raw);
-                        patch({
-                          breakerOverride:
-                            Object.keys(ov).length === 0 ? null : ov,
-                        });
-                      }}
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label>超时覆盖(秒,留空跟随全局)</Label>
-              <div className="grid grid-cols-2 gap-2">
-                {(
-                  [
-                    ["connectSecs", "连接"],
-                    ["ttftSecs", "首字"],
-                    ["streamIdleSecs", "流空闲"],
-                    ["nonStreamTotalSecs", "非流总时长"],
-                  ] as const
-                ).map(([k, label]) => (
-                  <div key={k} className="flex items-center gap-1">
-                    <span className="w-16 shrink-0 text-xs text-muted-foreground">
-                      {label}
-                    </span>
-                    <Input
-                      type="number"
-                      className="h-8"
-                      value={
-                        form.timeoutOverride?.[k] ??
-                        ("" as unknown as number)
-                      }
-                      onChange={(e) => {
-                        const raw = e.target.value;
-                        const ov = { ...(form.timeoutOverride ?? {}) };
-                        if (raw === "") delete ov[k];
-                        else ov[k] = Number(raw);
-                        patch({
-                          timeoutOverride:
-                            Object.keys(ov).length === 0 ? null : ov,
-                        });
-                      }}
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label>备注</Label>
-              <Input
-                value={form.remark}
-                onChange={(e) => patch({ remark: e.target.value })}
+            <div className="flex items-center justify-between pt-2">
+              <Label>启用渠道</Label>
+              <Switch
+                checked={form.enabled}
+                onCheckedChange={(v) => patch({ enabled: v })}
               />
-              <div className="pt-2">
-                <div className="flex items-center justify-between">
-                  <Label>启用渠道</Label>
-                  <Switch
-                    checked={form.enabled}
-                    onCheckedChange={(v) => patch({ enabled: v })}
-                  />
-                </div>
-              </div>
             </div>
           </div>
         </div>
@@ -689,6 +805,151 @@ function ChannelDialog({
   );
 }
 
+// ---------- 连通性测试弹窗 ----------
+
+function TestChannelDialog({
+  channel,
+  onClose,
+}: {
+  channel: Channel | null;
+  onClose: () => void;
+}) {
+  const open = channel !== null;
+  // 只列当前渠道的对外模型名(白名单):发给上游的是对外名,由网关做映射,
+  // 放开自定义会让人误以为要填上游名,与渠道路由语义冲突
+  const modelOptions = channel ? channel.models : [];
+  const [model, setModel] = useState("");
+  const [prompt, setPrompt] = useState("hi");
+  const [result, setResult] = useState<TestChannelResult | null>(null);
+
+  // 换渠道时重置表单(避免上次的模型/结果串到别的渠道)
+  useEffect(() => {
+    if (channel) {
+      setModel(channel.models[0] ?? "");
+      setPrompt("hi");
+      setResult(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channel?.id]);
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      api.testChannel(
+        channel!.id,
+        prompt.trim() || undefined,
+        model || undefined,
+      ),
+    onSuccess: (r) => setResult(r),
+    onError: (e) => toast.error(String(e)),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="flex max-h-[85vh] flex-col">
+        <DialogHeader>
+          <DialogTitle>测试连通性 · {channel?.name}</DialogTitle>
+          <DialogDescription>
+            发一条真实对话请求到该渠道上游,校验密钥与链路是否可用
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid gap-3">
+          <div className="space-y-1.5">
+            <Label>测试模型</Label>
+            {modelOptions.length > 0 ? (
+              <Select value={model} onValueChange={setModel}>
+                <SelectTrigger>
+                  <SelectValue placeholder="选择模型" />
+                </SelectTrigger>
+                <SelectContent>
+                  {modelOptions.map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {m}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+                该渠道未配置「支持的模型」,无可选测试模型——请先在渠道编辑中添加
+              </p>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            <Label>测试内容</Label>
+            <textarea
+              className="flex min-h-[64px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              placeholder="hi"
+            />
+            <p className="text-xs text-muted-foreground">
+              留空默认发送「hi」;回答越长耗时越久,建议短内容
+            </p>
+          </div>
+        </div>
+
+        {result && (
+          <div className="min-h-0 flex-1 overflow-auto rounded-md border bg-muted/20 p-2.5">
+            {result.ok ? (
+              <div className="space-y-1.5 text-xs">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                  <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                    ✓ 测试成功
+                  </span>
+                  <span className="text-muted-foreground">
+                    首字 <span className="font-mono">{result.ttftMs}ms</span>
+                  </span>
+                  <span className="text-muted-foreground">
+                    总耗时 <span className="font-mono">{result.latencyMs}ms</span>
+                  </span>
+                  {result.completionTokens != null && (
+                    <span className="text-muted-foreground">
+                      输出{" "}
+                      <span className="font-mono">
+                        {result.completionTokens} tok
+                      </span>
+                    </span>
+                  )}
+                  {result.model && (
+                    <span className="font-mono text-muted-foreground">
+                      {result.model}
+                    </span>
+                  )}
+                </div>
+                {result.reply && (
+                  <div className="whitespace-pre-wrap break-words rounded-md border bg-background px-2.5 py-1.5 font-mono leading-5">
+                    {result.reply}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <span className="text-xs text-destructive">
+                ✗ {result.message}
+              </span>
+            )}
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            关闭
+          </Button>
+          <Button
+            disabled={mutation.isPending || !model}
+            onClick={() => mutation.mutate()}
+          >
+            {mutation.isPending && (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            )}
+            开始测试
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ---------- 渠道页 ----------
 
 export function ChannelsPage() {
@@ -697,23 +958,11 @@ export function ChannelsPage() {
   const qc = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Channel | null>(null);
-  const [testing, setTesting] = useState<number | null>(null);
-  // 对话测试结果:渠道 id → 最近一次结果(列表行内展开显示)
-  const [testResult, setTestResult] = useState<Record<number, TestChannelResult>>({});
+  // 连通性测试弹窗:目标渠道(null = 关闭)
+  const [testTarget, setTestTarget] = useState<Channel | null>(null);
 
   const breakerOf = (id: number) =>
     breakers?.find((b) => b.channelId === id);
-
-  const testMutation = useMutation({
-    mutationFn: (id: number) => api.testChannel(id),
-    onMutate: (id) => setTesting(id),
-    onSettled: () => setTesting(null),
-    onSuccess: (r, id) => {
-      setTestResult((m) => ({ ...m, [id]: r }));
-      if (r.ok) toast.success(r.message);
-    },
-    onError: (e) => toast.error(String(e)),
-  });
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["channels"] });
 
@@ -809,14 +1058,9 @@ export function ChannelsPage() {
                           variant="ghost"
                           size="icon"
                           title="测试连通性"
-                          disabled={testing === ch.id}
-                          onClick={() => testMutation.mutate(ch.id)}
+                          onClick={() => setTestTarget(ch)}
                         >
-                          {testing === ch.id ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <Zap className="h-3.5 w-3.5" />
-                          )}
+                          <Zap className="h-3.5 w-3.5" />
                         </Button>
                         <Button
                           variant="ghost"
@@ -885,48 +1129,6 @@ export function ChannelsPage() {
                       </div>
                     </td>
                   </tr>
-                  {/* 对话测试结果:测试后展开在渠道行下方,显示回复内容与性能参数 */}
-                  {testResult[ch.id] && (
-                    <tr className="border-b last:border-0">
-                      <td colSpan={7} className="bg-muted/20 px-3 py-2.5">
-                        {(() => {
-                          const r = testResult[ch.id];
-                          return r.ok ? (
-                            <div className="space-y-1.5 text-xs">
-                              <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                                <span className="font-medium text-emerald-600 dark:text-emerald-400">
-                                  ✓ 测试成功
-                                </span>
-                                <span className="text-muted-foreground">
-                                  首字 <span className="font-mono">{r.ttftMs}ms</span>
-                                </span>
-                                <span className="text-muted-foreground">
-                                  总耗时 <span className="font-mono">{r.latencyMs}ms</span>
-                                </span>
-                                {r.completionTokens != null && (
-                                  <span className="text-muted-foreground">
-                                    输出 <span className="font-mono">{r.completionTokens} tok</span>
-                                  </span>
-                                )}
-                                {r.model && (
-                                  <span className="font-mono text-muted-foreground">
-                                    {r.model}
-                                  </span>
-                                )}
-                              </div>
-                              {r.reply && (
-                                <div className="whitespace-pre-wrap rounded-md border bg-background px-2.5 py-1.5 font-mono leading-5">
-                                  {r.reply}
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <span className="text-xs text-destructive">✗ {r.message}</span>
-                          );
-                        })()}
-                      </td>
-                    </tr>
-                  )}
                   </Fragment>
                 ))}
               </tbody>
@@ -939,6 +1141,10 @@ export function ChannelsPage() {
         open={dialogOpen}
         editing={editing}
         onClose={() => setDialogOpen(false)}
+      />
+      <TestChannelDialog
+        channel={testTarget}
+        onClose={() => setTestTarget(null)}
       />
       <div className={cn("h-2")} />
     </div>

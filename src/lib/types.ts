@@ -120,6 +120,8 @@ export interface Channel {
   enabled: boolean;
   /** null=跟随系统;""=直连;其他=代理 URL */
   proxy: string | null;
+  /** 渠道级并发上限(null = 不限);0 亦视为不限 */
+  maxConcurrency: number | null;
   models: string[];
   modelMap: Record<string, string>;
   timeoutOverride: TimeoutOverride | null;

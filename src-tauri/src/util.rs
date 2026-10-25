@@ -193,6 +193,15 @@ mod tests {
             join_base("https://relay.example.com/v1beta", "/v1/chat/completions"),
             "https://relay.example.com/v1beta/v1/chat/completions"
         );
+        // Gemini:base 带/不带 /v1beta 都正确(带时去重,不带时补全)
+        assert_eq!(
+            join_base("https://relay.example.com/v1beta", "/v1beta/models/g:x"),
+            "https://relay.example.com/v1beta/models/g:x"
+        );
+        assert_eq!(
+            join_base("https://generativelanguage.googleapis.com", "/v1beta/models/g:x"),
+            "https://generativelanguage.googleapis.com/v1beta/models/g:x"
+        );
     }
 
     #[test]

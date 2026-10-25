@@ -6,6 +6,7 @@ pub mod auth;
 pub mod relay;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
@@ -261,7 +262,7 @@ async fn gateway_inner(
         // allow() 会消费 HalfOpen 探测名额,若之后因模型不匹配/未配密钥 continue,
         // 名额无人记账 → 渠道永久卡死 HalfOpen
         let mapped = mapped_model(ch, &model_in);
-        if !channel_supports(ch, &mapped) {
+        if !channel_supports(ch, &model_in, &mapped) {
             continue;
         }
         let keys_order = rotate_keys(&state, ch);
@@ -276,6 +277,8 @@ async fn gateway_inner(
             continue;
         }
         let timeouts = effective_timeouts(&state, ch);
+        // 渠道并发闸门:设了上限则排队等许可(流式请求需持有到流结束才释放)
+        let mut permit = acquire_channel_permit(&state, ch).await;
         let mut retry_after: Option<Duration> = None;
 
         let mut allow_inject = true;
@@ -309,10 +312,12 @@ async fn gateway_inner(
 
             if status == 200 {
                 if is_stream {
+                    // 许可转移给 start_stream(随流结束释放);本循环不再持有
+                    let stream_permit = permit.take();
                     match start_stream(
                         &state, resp, ch, &ir, entry, started, t_try, &key, tag.clone(), &model_in,
                         &mapped, &client_ua, &mut attempts, req_snapshot.clone(),
-                        last_dropped.clone(), resp_id.clone(), completion.clone(),
+                        last_dropped.clone(), resp_id.clone(), completion.clone(), stream_permit,
                     )
                     .await
                     {
@@ -571,7 +576,8 @@ fn prepare_upstream(
 }
 
 /// 上游 URL:openai /v1/chat/completions;anthropic /v1/messages;
-/// gemini 模型名拼在路径(流式 :streamGenerateContent?alt=sse)
+/// gemini 模型名拼在路径(流式 :streamGenerateContent?alt=sse)。
+/// 三协议统一走 join_base:base 带不带版本前缀(/v1、/v1beta)都兼容
 fn upstream_url(ch: &Channel, mapped: &str, is_stream: bool) -> Result<String, String> {
     match ch.protocol {
         UpstreamProto::OpenAi => Ok(util::join_base(&ch.base_url, "/v1/chat/completions")),
@@ -583,12 +589,29 @@ fn upstream_url(ch: &Channel, mapped: &str, is_stream: bool) -> Result<String, S
                 "generateContent"
             };
             Ok(format!(
-                "{}/v1beta/models/{}:{action}",
-                ch.base_url.trim_end_matches('/'),
-                mapped
+                "{}:{action}",
+                util::join_base(&ch.base_url, &format!("/v1beta/models/{mapped}"))
             ))
         }
     }
+}
+
+/// 渠道并发闸门:取该渠道的信号量许可(None = 渠道未设上限,不限流)。
+/// 排队等待而非直接拒绝:并发上限的语义是"最多 N 个同时在途",超出应等而不是失败
+async fn acquire_channel_permit(
+    state: &AppState,
+    ch: &Channel,
+) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    let limit = ch.max_concurrency.filter(|v| *v > 0)?;
+    let sem = {
+        let mut gates = util::lock_ok(&state.channel_gates);
+        gates
+            .entry((ch.id, limit))
+            .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(limit as usize)))
+            .clone()
+    };
+    // 信号量不应被关闭;真出现则退化为不限流,不阻断请求
+    sem.acquire_owned().await.ok()
 }
 
 async fn send_upstream(
@@ -931,6 +954,8 @@ async fn start_stream(
     dropped: Vec<String>,
     resp_id: Option<String>,
     completion: Option<(String, Vec<Message>)>,
+    // 渠道并发许可:流式响应持有到此流结束(on_done 内释放)
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
 ) -> Result<Response, FailReason> {
     let timeouts = effective_timeouts(state, ch);
     // TTFT 超时:等待首个字节;此时还未向客户端写任何字节,可安全 failover
@@ -1051,6 +1076,8 @@ async fn start_stream(
                 resp_snapshot: Some(truncate_snapshot(&state2, &resp_text)),
             })
             .await;
+            // 流结束(含中断)后释放渠道并发名额
+            drop(permit);
         });
     });
     let body = relay::start_relay(        bstream,
@@ -1078,7 +1105,44 @@ async fn start_stream(
 // 模型列表(双格式自适应)与工具函数
 // ---------------------------------------------------------------------------
 
-/// 聚合该密钥可用渠道的模型清单(排序去重)。
+/// 单个渠道贡献的**对外模型名**(纯逻辑,便于单测)。
+///
+/// 只返回对外名:`/v1/models` 是给客户端选模型用的,客户端能且只能用对外名
+/// 发起请求——返回上游名会让客户端选到"网关不认识的名字"而 404/503。
+///
+/// 隐藏条件(两条同时成立即为纯上游名):
+/// 1. 出现在 modelMap 的值里(是被映射的目标);
+/// 2. 不作为 modelMap 的键(自己不是对外名)。
+///
+/// 注意这里**故意不看白名单**:旧数据里常见"白名单存上游名 + 另配一条对外名
+/// 映射到它"的组合,若因为它在白名单里就保留,客户端会同时看到对外名和上游名
+/// 两个选项,选到后者即 404。链式映射(a→b 且 b→c)中 b 既是值又是键,
+/// 条件 2 不成立,故 b 会保留,符合预期。
+fn channel_public_models(ch: &Channel, fallback: &[String]) -> Vec<String> {
+    // 来源 = 白名单(或定价兜底) + 映射键(兼容只配映射不配白名单的数据)
+    let mut source: Vec<String> = if ch.models.is_empty() {
+        fallback.to_vec()
+    } else {
+        ch.models.clone()
+    };
+    for k in ch.model_map.keys() {
+        if !k.is_empty() && !source.contains(k) {
+            source.push(k.clone());
+        }
+    }
+    source
+        .into_iter()
+        .filter(|m| {
+            let is_mapped_target = ch.model_map.values().any(|u| u == m);
+            let is_public_key = ch.model_map.contains_key(m);
+            // 保留条件:不是映射目标,或者自己也是对外名(链式映射的中间名)
+            !is_mapped_target || is_public_key
+        })
+        .collect()
+}
+
+/// 聚合该密钥可用渠道的**对外模型名**清单(排序去重)。
+///
 /// 渠道"模型不限"(models 为空)时无从枚举,用定价表全量模型兜底——
 /// 定价表即用户声明可计费的模型全集;否则空列表会让严格客户端直接判定不可用
 fn key_model_list(state: &AppState, key: &auth::AuthedKey) -> Vec<String> {
@@ -1098,14 +1162,9 @@ fn key_model_list(state: &AppState, key: &auth::AuthedKey) -> Vec<String> {
             if !ch.enabled {
                 continue;
             }
-            let source: &Vec<String> = if ch.models.is_empty() {
-                &price_models
-            } else {
-                &ch.models
-            };
-            for m in source {
-                if !models.contains(m) {
-                    models.push(m.clone());
+            for m in channel_public_models(ch, &price_models) {
+                if !models.contains(&m) {
+                    models.push(m);
                 }
             }
         }
@@ -1187,9 +1246,17 @@ fn mapped_model(ch: &Channel, model_in: &str) -> String {
         .unwrap_or_else(|| model_in.to_string())
 }
 
-/// 支持列表判定用映射后的名字;空 = 不限制
-fn channel_supports(ch: &Channel, mapped: &str) -> bool {
-    ch.models.is_empty() || ch.models.iter().any(|m| m == mapped)
+/// 白名单判定:空 = 不限制。
+///
+/// 必须**同时**接受对外名与映射后的上游名:
+/// - 新语义(渠道编辑「支持的模型」表):白名单里填的是对外名,请求也用对外名进来,
+///   `modelMap` 只负责改写发给上游的 model 字段。若只拿映射名去判定,配了映射的
+///   渠道会因"白名单里没有上游名"被判不匹配而全部 503。
+/// - 旧语义(历史数据/导入):白名单里可能直接存的是上游名,故映射名也要接受。
+fn channel_supports(ch: &Channel, model_in: &str, mapped: &str) -> bool {
+    ch.models.is_empty()
+        || ch.models.iter().any(|m| m == model_in)
+        || ch.models.iter().any(|m| m == mapped)
 }
 
 /// 渠道内密钥轮询起点(全局递增),401/403/429 时按序轮换
@@ -1531,5 +1598,92 @@ async fn finalize_log(input: FinalizeInput<'_>) {
     }
     if let Err(_e) = state.log_tx.try_send(entry) {
         // 队列满:丢弃日志,绝不阻塞响应
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ch(models: &[&str], map: &[(&str, &str)]) -> Channel {
+        Channel {
+            id: 1,
+            name: "t".into(),
+            protocol: UpstreamProto::OpenAi,
+            base_url: "http://127.0.0.1:1".into(),
+            api_keys: vec![],
+            enabled: true,
+            proxy: None,
+            max_concurrency: None,
+            models: models.iter().map(|s| s.to_string()).collect(),
+            model_map: map
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            timeout_override: None,
+            breaker_override: None,
+            remark: String::new(),
+            icon: String::new(),
+            price_currency: "cny".into(),
+            rate_rules: Vec::new(),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    #[test]
+    fn public_models_expose_alias_only() {
+        // 新语义:白名单=对外名,映射改写上游名 → /v1/models 必须只出现对外名
+        let c = ch(&["claude-opus-5-5"], &[("claude-opus-5-5", "deepseek-v4.1-flash")]);
+        assert_eq!(
+            channel_public_models(&c, &[]),
+            vec!["claude-opus-5-5".to_string()]
+        );
+    }
+
+    #[test]
+    fn public_models_hide_upstream_alias() {
+        // 旧数据:白名单里直接存了上游名,映射里也有 → 上游名不得暴露
+        let c = ch(
+            &["deepseek-v4.1-flash"],
+            &[("claude-opus-5-5", "deepseek-v4.1-flash")],
+        );
+        let got = channel_public_models(&c, &[]);
+        assert_eq!(got, vec!["claude-opus-5-5".to_string()]);
+        assert!(!got.iter().any(|m| m == "deepseek-v4.1-flash"));
+    }
+
+    #[test]
+    fn public_models_keep_name_that_is_both_alias_and_target() {
+        // 链式映射 x→a、a→b:a 既是映射值又是映射键,必须保留(否则断链)
+        let c = ch(&["x", "a", "b"], &[("x", "a"), ("a", "b")]);
+        let got = channel_public_models(&c, &[]);
+        assert!(got.contains(&"x".to_string()));
+        assert!(got.contains(&"a".to_string()));
+        // b 只作为最终上游目标,不是对外名 → 隐藏
+        assert!(!got.contains(&"b".to_string()));
+    }
+
+    #[test]
+    fn public_models_fall_back_to_price_table() {
+        // 白名单为空 = 不限:用定价表兜底,且不泄露映射目标
+        let c = ch(&[], &[("ext", "up")]);
+        let got = channel_public_models(&c, &["up".to_string(), "other".to_string()]);
+        assert!(got.contains(&"ext".to_string()));
+        assert!(got.contains(&"other".to_string()));
+        assert!(!got.contains(&"up".to_string()));
+    }
+
+    #[test]
+    fn channel_supports_accepts_alias_and_upstream() {
+        let c = ch(&["claude-opus-5-5"], &[("claude-opus-5-5", "deepseek-v4.1-flash")]);
+        // 对外名必须命中(否则配了映射的渠道全部 503)
+        assert!(channel_supports(&c, "claude-opus-5-5", "deepseek-v4.1-flash"));
+        // 旧数据里白名单存上游名时也要命中
+        let c2 = ch(&["deepseek-v4.1-flash"], &[]);
+        assert!(channel_supports(&c2, "deepseek-v4.1-flash", "deepseek-v4.1-flash"));
+        // 都不在则拒绝
+        assert!(!channel_supports(&c, "other", "other"));
+        // 白名单空 = 不限
+        assert!(channel_supports(&ch(&[], &[]), "any", "any"));
     }
 }

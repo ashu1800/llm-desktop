@@ -33,6 +33,24 @@ function fmtPrice(n: number): string {
   return n.toLocaleString("zh-CN", { maximumFractionDigits: 4 });
 }
 
+/** 价格单元格:双币种条目显示 ¥X/$Y 两行;单币种也带 ¥ 前缀——单位显式化,
+    与双币种行对齐(全部带符号,扫读时不需猜币种) */
+function PriceCell({
+  cny,
+  usd,
+}: {
+  cny: number;
+  usd: number | null;
+}) {
+  if (usd == null) return <>¥{fmtPrice(cny)}</>;
+  return (
+    <span className="inline-flex flex-col items-end leading-4">
+      <span>¥{fmtPrice(cny)}</span>
+      <span className="text-muted-foreground">${fmtPrice(usd)}</span>
+    </span>
+  );
+}
+
 const ZERO_PRICE: PriceEntry = {
   pattern: "",
   input: 0,
@@ -356,15 +374,18 @@ export function PricingPage() {
               </p>
             </div>
           ) : (
-            <table className="w-full text-sm">
+            <table className="w-full table-fixed text-sm">
               <thead>
                 <tr className="border-b text-left text-xs text-muted-foreground">
+                  {/* 列宽:模型列自适应撑满,四个价格列等宽,操作列定宽右贴边——
+                      默认 auto 布局下模型列被内容撑得极宽,价格列挤成团。
+                      操作列带左边框:数据区与动作区分隔 */}
                   <th className="py-2 pr-3 font-medium">模型</th>
-                  <th className="py-2 pr-3 text-right font-medium">输入</th>
-                  <th className="py-2 pr-3 text-right font-medium">输出</th>
-                  <th className="py-2 pr-3 text-right font-medium">缓存读</th>
-                  <th className="py-2 pr-3 text-right font-medium">缓存写</th>
-                  <th className="py-2 font-medium">操作</th>
+                  <th className="w-28 py-2 pr-3 text-right font-medium">输入</th>
+                  <th className="w-28 py-2 pr-3 text-right font-medium">输出</th>
+                  <th className="w-28 py-2 pr-3 text-right font-medium">缓存读</th>
+                  <th className="w-28 py-2 pr-3 text-right font-medium">缓存写</th>
+                  <th className="w-28 border-l py-2 text-center font-medium">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -384,19 +405,19 @@ export function PricingPage() {
                       )}
                     </td>
                     <td className="py-2.5 pr-3 text-right font-mono text-xs">
-                      {fmtPrice(p.input)}
+                      <PriceCell cny={p.input} usd={p.inputUsd} />
                     </td>
                     <td className="py-2.5 pr-3 text-right font-mono text-xs">
-                      {fmtPrice(p.output)}
+                      <PriceCell cny={p.output} usd={p.outputUsd} />
                     </td>
                     <td className="py-2.5 pr-3 text-right font-mono text-xs">
-                      {fmtPrice(p.cacheRead)}
+                      <PriceCell cny={p.cacheRead} usd={p.cacheReadUsd} />
                     </td>
                     <td className="py-2.5 pr-3 text-right font-mono text-xs">
-                      {fmtPrice(p.cacheWrite)}
+                      <PriceCell cny={p.cacheWrite} usd={p.cacheWriteUsd} />
                     </td>
-                    <td className="py-2.5">
-                      <div className="flex items-center gap-0.5">
+                    <td className="border-l py-2.5">
+                      <div className="flex items-center justify-end gap-0.5">
                         <Button
                           variant="ghost"
                           size="icon"

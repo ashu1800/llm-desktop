@@ -48,6 +48,9 @@ pub struct Channel {
     pub enabled: bool,
     /// None=跟随系统代理;Some("")=强制直连;Some(url)=自定义代理
     pub proxy: Option<String>,
+    /// 渠道级并发上限;None/0 = 不限。调度侧据此限制同时在途请求数
+    #[serde(default)]
+    pub max_concurrency: Option<i64>,
     /// 支持的模型列表;空 = 不限制
     pub models: Vec<String>,
     /// 入站模型名 → 上游模型名,精确匹配,未命中原样透传
@@ -101,6 +104,8 @@ struct ChannelRow {
     api_keys: String,
     enabled: bool,
     proxy: Option<String>,
+    #[sqlx(default)]
+    max_concurrency: Option<i64>,
     models: String,
     model_map: String,
     timeout_override: Option<String>,
@@ -142,6 +147,8 @@ impl ChannelRow {
             api_keys: parse_json("api_keys", &self.api_keys, Vec::new()),
             enabled: self.enabled,
             proxy: self.proxy,
+            // 负值/0 归一为不限(None)
+            max_concurrency: self.max_concurrency.filter(|v| *v > 0),
             models: parse_json("models", &self.models, Vec::new()),
             model_map: parse_json("model_map", &self.model_map, Default::default()),
             timeout_override: self
@@ -193,7 +200,7 @@ fn sanitize_rules(rules: Vec<RateRule>) -> Vec<RateRule> {
 
 pub async fn list(pool: &SqlitePool) -> Result<Vec<Channel>, String> {
     let rows: Vec<ChannelRow> = sqlx::query_as(
-        "SELECT id, name, protocol, base_url, api_keys, enabled, proxy, models, model_map,
+        "SELECT id, name, protocol, base_url, api_keys, enabled, proxy, max_concurrency, models, model_map,
                 timeout_override, breaker_override, remark, icon, price_currency, rate_rules,
                 created_at, updated_at
          FROM channels ORDER BY id",
@@ -207,10 +214,10 @@ pub async fn list(pool: &SqlitePool) -> Result<Vec<Channel>, String> {
 pub async fn insert(pool: impl Executor<'_, Database = sqlx::Sqlite>, c: &Channel) -> Result<i64, String> {
     let ts = now_ms();
     let id: (i64,) = sqlx::query_as(
-        "INSERT INTO channels (name, protocol, base_url, api_keys, enabled, proxy, models,
+        "INSERT INTO channels (name, protocol, base_url, api_keys, enabled, proxy, max_concurrency, models,
              model_map, timeout_override, breaker_override, remark, icon, price_currency,
              rate_rules, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(&c.name)
     .bind(c.protocol.as_str())
@@ -218,6 +225,7 @@ pub async fn insert(pool: impl Executor<'_, Database = sqlx::Sqlite>, c: &Channe
     .bind(serde_json::to_string(&c.api_keys).map_err(|e| e.to_string())?)
     .bind(c.enabled)
     .bind(&c.proxy)
+    .bind(c.max_concurrency)
     .bind(serde_json::to_string(&c.models).map_err(|e| e.to_string())?)
     .bind(serde_json::to_string(&c.model_map).map_err(|e| e.to_string())?)
     .bind(opt_json(&c.timeout_override)?)
@@ -240,7 +248,7 @@ pub async fn insert(pool: impl Executor<'_, Database = sqlx::Sqlite>, c: &Channe
 pub async fn update(pool: &SqlitePool, c: &Channel) -> Result<(), String> {
     sqlx::query(
         "UPDATE channels SET name=?, protocol=?, base_url=?, api_keys=?, enabled=?, proxy=?,
-             models=?, model_map=?, timeout_override=?, breaker_override=?, remark=?, icon=?,
+             max_concurrency=?, models=?, model_map=?, timeout_override=?, breaker_override=?, remark=?, icon=?,
              price_currency=?, rate_rules=?, updated_at=?
          WHERE id=?",
     )
@@ -250,6 +258,7 @@ pub async fn update(pool: &SqlitePool, c: &Channel) -> Result<(), String> {
     .bind(serde_json::to_string(&c.api_keys).map_err(|e| e.to_string())?)
     .bind(c.enabled)
     .bind(&c.proxy)
+    .bind(c.max_concurrency)
     .bind(serde_json::to_string(&c.models).map_err(|e| e.to_string())?)
     .bind(serde_json::to_string(&c.model_map).map_err(|e| e.to_string())?)
     .bind(opt_json(&c.timeout_override)?)

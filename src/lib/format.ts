@@ -27,58 +27,56 @@ export function fmtMs(ms: number | null | undefined): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-/** 五档色阶:0=深绿(快) → 1=浅绿 → 2=橙黄 → 3=浅红 → 4=深红(慢/异常) */
+/** 三档色阶:0=绿(正常) → 1=橙(偏慢) → 2=红(异常) */
 const LADDER = [
   "text-emerald-600 dark:text-emerald-400",
-  "text-emerald-500/70 dark:text-emerald-400/60",
   "text-amber-500",
-  "text-red-400",
   "text-red-600 dark:text-red-400",
 ];
 
+/** 两档阈值:[绿上限, 橙上限];超过橙上限即红 */
+export type PairThresholds = [number, number];
+
 /**
- * 耗时分档着色:深绿=快 → 浅绿=可接受 → 橙黄=偏慢 → 浅红=慢 → 深红=异常。
- * thresholds 传四档上限(毫秒)。
+ * 耗时分档着色:绿=正常 → 橙=偏慢 → 红=异常。
+ * thresholds 传两档上限(毫秒),低于第一档绿、低于第二档橙、其余红。
  *
- * 阈值依据(2026-10 拍板,按"慢 LLM/长上下文/中转"实际体验定档):
- * - 首字 [5000, 10000, 20000, 40000]:≤5s 正常(深绿);5~10s 浅绿;
- *   10~20s 橙黄;20~40s 浅红;≥40s 深红(明显异常)。
- * - 生成耗时(总耗时−首字,流式):同比例阶梯,长输出场景放宽。
+ * 首字阈值(用户指定):0~5s 绿;5~15s 橙;≥15s 红。
+ * 生成耗时阈值:长输出场景,20s 内绿;20~60s 橙;≥60s 红(再结合速度取较轻档)。
  */
 export function latencyColor(
   ms: number | null | undefined,
-  thresholds: [number, number, number, number],
+  thresholds: PairThresholds,
 ): string {
   if (ms == null) return "";
   return LADDER[durationSeverity(ms, thresholds)];
 }
 
-// 时长档位:低于第几档阈值(越快越靠前)
-function durationSeverity(
-  ms: number,
-  thresholds: [number, number, number, number],
-): number {
+// 时长档位:低于第一档 0(绿)、低于第二档 1(橙)、其余 2(红)
+function durationSeverity(ms: number, thresholds: PairThresholds): number {
   if (ms < thresholds[0]) return 0;
   if (ms < thresholds[1]) return 1;
-  if (ms < thresholds[2]) return 2;
-  if (ms < thresholds[3]) return 3;
-  return 4;
+  return 2;
 }
 
 /**
  * 生成速度分档着色(t/s):与耗时色阶语义对齐,方向相反——快=绿,慢=红。
- * thresholds 传四档下限:≥[0] 深绿 → ≥[1] 浅绿 → ≥[2] 橙黄 → ≥[3] 浅红,< [3] 深红。
- * 阈值依据(2026-10 拍板):≥50 t/s 旗舰水准(深绿);20~50 良好(浅绿);
- * 10~20 偏慢(橙黄,长上下文/推理模型常见);5~10 慢(浅红);<5 明显异常(深红,
- * 多为超长上下文预填或上游限流)。
+ * ≥150 彩虹渐变(极速档,视觉上"超出档位");80~150 绿;40~80 橙;≤40 红(用户指定)。
  */
 export function speedColor(tps: number | null | undefined): string {
   if (tps == null) return "";
-  if (tps >= 50) return LADDER[0];
-  if (tps >= 20) return LADDER[1];
-  if (tps >= 10) return LADDER[2];
-  if (tps >= 5) return LADDER[3];
-  return LADDER[4];
+  if (tps >= 150) return "rainbow-text";
+  return LADDER[speedSeverity(tps)];
+}
+
+// 速度档位:快=0(绿)、中=1(橙)、慢=2(红)。
+// 极速档(≥150)与绿同严重度(都是"很好"),差异只在 speedColor 的颜色表现,
+// 故这里不单独设档——否则两处各写一遍阈值,改一处忘另一处会让「速度」列
+// 与「耗时」列(经 durationColor 取较轻档)对同一条日志给出不一致的判定
+function speedSeverity(tps: number): number {
+  if (tps >= 80) return 0;
+  if (tps > 40) return 1;
+  return 2;
 }
 
 /**
@@ -89,17 +87,15 @@ export function speedColor(tps: number | null | undefined): string {
  */
 export function durationColor(
   genMs: number | null | undefined,
-  thresholds: [number, number, number, number],
+  thresholds: PairThresholds,
   opts?: { isStream?: boolean; completionTokens?: number },
 ): string {
   const { isStream, completionTokens } = opts ?? {};
   if (!isStream || genMs == null || genMs <= 0 || !completionTokens) {
     return latencyColor(genMs, thresholds);
   }
-  // 速度档位取"低于第几档下限"的倒数(越快严重度越低),与时长档取较轻者
   const tps = (completionTokens * 1000) / genMs;
-  const speedSeverity = tps >= 50 ? 0 : tps >= 20 ? 1 : tps >= 10 ? 2 : tps >= 5 ? 3 : 4;
-  const sev = Math.min(durationSeverity(genMs, thresholds), speedSeverity);
+  const sev = Math.min(durationSeverity(genMs, thresholds), speedSeverity(tps));
   return LADDER[sev];
 }
 

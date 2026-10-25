@@ -9,6 +9,7 @@ import {
   Waypoints,
   type LucideIcon,
 } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { cn } from "@/lib/utils";
 import type { PageKey } from "@/lib/types";
 
@@ -45,7 +46,7 @@ export function Sidebar({
   version,
 }: SidebarProps) {
   return (
-    <aside className="flex w-[134px] shrink-0 flex-col border-r bg-muted">
+    <aside className="flex w-[161px] shrink-0 flex-col border-r bg-muted">
       {/* 品牌区:自绘标题栏后应用名在顶栏展示,此处只保留图标+副标题避免重复 */}
       <div className="flex h-14 items-center gap-2.5 border-b px-4">
         <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
@@ -73,16 +74,17 @@ export function Sidebar({
         ))}
       </nav>
       <div className="flex items-center justify-between border-t p-3 text-xs text-muted-foreground">
-        <a
-          href="https://github.com/ashu1800/llm-desktop"
-          target="_blank"
-          rel="noopener noreferrer"
+        {/* Tauri 下 <a target=_blank> 被拦,必须走 opener 插件用系统浏览器打开 */}
+        <button
           title="GitHub 仓库"
           className="inline-flex items-center gap-1.5 transition-colors hover:text-foreground"
+          onClick={() =>
+            openUrl("https://github.com/ashu1800/llm-desktop").catch(() => {})
+          }
         >
           <Github className="h-3.5 w-3.5" />
           <span>{version ? `v${version}` : ""}</span>
-        </a>
+        </button>
         {updateAvailable && (
           <button
             onClick={onOpenUpdate}

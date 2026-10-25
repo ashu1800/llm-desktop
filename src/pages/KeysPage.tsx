@@ -378,15 +378,17 @@ export function KeysPage() {
               </p>
             </div>
           ) : (
-            <table className="w-full text-sm">
+            <table className="w-full table-fixed text-sm">
               <thead>
                 <tr className="border-b text-left text-xs text-muted-foreground">
+                  {/* 列宽:名称/密钥/渠道自适应,状态定宽,操作列固定最右带分隔线
+                      (与定价页同款布局) */}
                   <th className="py-2 pr-3 font-medium">名称</th>
                   <th className="py-2 pr-3 font-medium">密钥</th>
-                  <th className="py-2 pr-3 font-medium">可用渠道</th>
-                  <th className="py-2 pr-3 font-medium">最近使用</th>
-                  <th className="py-2 pr-3 font-medium">状态</th>
-                  <th className="py-2 font-medium">操作</th>
+                  <th className="w-36 py-2 pr-3 font-medium">可用渠道</th>
+                  <th className="w-40 py-2 pr-3 font-medium">最近使用</th>
+                  <th className="w-20 py-2 pr-3 font-medium">状态</th>
+                  <th className="w-28 border-l py-2 text-center font-medium">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -427,8 +429,8 @@ export function KeysPage() {
                         <Badge variant="muted">禁用</Badge>
                       )}
                     </td>
-                    <td className="py-2.5">
-                      <div className="flex items-center gap-0.5">
+                    <td className="border-l py-2.5">
+                      <div className="flex items-center justify-end gap-0.5">
                         <Button
                           variant="ghost"
                           size="icon"
