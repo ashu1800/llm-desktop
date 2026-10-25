@@ -242,6 +242,8 @@ pub fn parse_request(v: &Value, model_from_path: Option<&str>) -> Result<Canonic
         if budget > 0 {
             // 饱和转换,防 u64 超大值静默回绕
             ir.reasoning = Some(Reasoning::Budget(u32::try_from(budget).unwrap_or(u32::MAX)));
+            // 原值存档:Gemini 传的是 token 预算数字,展示按 "<N> tok"
+            ir.reasoning_raw = Some(budget.to_string());
         }
     }
 

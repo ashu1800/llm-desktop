@@ -179,6 +179,12 @@ pub fn parse_request(v: &Value) -> Result<(CanonicalRequest, Option<String>), St
     ir.max_tokens = obj.get("max_output_tokens").and_then(Value::as_i64);
     ir.temperature = obj.get("temperature").and_then(Value::as_f64);
     ir.top_p = obj.get("top_p").and_then(Value::as_f64);
+    // 原值存档:日志按客户端原值显示
+    ir.reasoning_raw = obj
+        .get("reasoning")
+        .and_then(|r| r.get("effort"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
     if let Some(effort) = obj
         .get("reasoning")
         .and_then(|r| r.get("effort"))

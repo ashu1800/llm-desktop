@@ -113,6 +113,10 @@ pub struct CanonicalRequest {
     pub stop: Vec<String>,
     pub stream: bool,
     pub reasoning: Option<Reasoning>,
+    /// 客户端传入的推理强度**原值**(reasoning_effort/reasoning.effort 原样字符串;
+    /// thinkingBudget 原始数值格式化)。归一化会丢掉 max/x-tier 等非标档位,
+    /// 日志展示按原值,转发映射照旧走 Reasoning 枚举
+    pub reasoning_raw: Option<String>,
     /// 转换中安全丢弃的字段名(去重),随日志记录
     pub dropped_fields: Vec<String>,
 }
@@ -137,11 +141,14 @@ impl CanonicalRequest {
     }
 
     pub fn effort_of(s: &str) -> Option<Effort> {
-        match s {
-            "minimal" => Some(Effort::Minimal),
+        // 兼容非标准取值:多家客户端用 "max"(如 DSH/glm),按 high 处理;
+        // "none" 视为关闭(minimal)。"gpt-5" 系还出现过 "medium-high" 混合档,
+        // 取保守下界 medium
+        match s.trim().to_lowercase().as_str() {
+            "minimal" | "none" | "off" => Some(Effort::Minimal),
             "low" => Some(Effort::Low),
-            "medium" => Some(Effort::Medium),
-            "high" => Some(Effort::High),
+            "medium" | "medium-high" | "medium_plus" => Some(Effort::Medium),
+            "high" | "max" | "maximum" | "ultra" => Some(Effort::High),
             _ => None,
         }
     }
@@ -227,4 +234,27 @@ pub enum StreamEvent {
     UpstreamError {
         message: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn effort_of_accepts_non_standard_values() {
+        // 标准四档
+        assert_eq!(CanonicalRequest::effort_of("low"), Some(Effort::Low));
+        assert_eq!(CanonicalRequest::effort_of("high"), Some(Effort::High));
+        // 非标准取值(实际客户端在用):DSH 发 "max"
+        assert_eq!(CanonicalRequest::effort_of("max"), Some(Effort::High));
+        assert_eq!(CanonicalRequest::effort_of("none"), Some(Effort::Minimal));
+        assert_eq!(
+            CanonicalRequest::effort_of("medium-high"),
+            Some(Effort::Medium)
+        );
+        // 大小写与空白容错
+        assert_eq!(CanonicalRequest::effort_of(" High "), Some(Effort::High));
+        // 未知值不猜
+        assert_eq!(CanonicalRequest::effort_of("turbo"), None);
+    }
 }

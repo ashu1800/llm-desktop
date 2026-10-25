@@ -129,6 +129,8 @@ pub fn parse_request(v: &Value) -> Result<CanonicalRequest, String> {
             if let Some(b) = t.get("budget_tokens").and_then(Value::as_u64) {
                 // u64→u32 饱和转换:超大值(恶意/异常客户端)钳到 u32::MAX 而非静默回绕
                 ir.reasoning = Some(Reasoning::Budget(u32::try_from(b).unwrap_or(u32::MAX)));
+                // 原值存档:Anthropic 传的是 token 预算数字,展示按 "<N> tok"
+                ir.reasoning_raw = Some(b.to_string());
             }
         }
         _ => {}

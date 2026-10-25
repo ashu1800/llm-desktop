@@ -225,7 +225,12 @@ async fn gateway_inner(
         ir.model = model.clone();
         ir.stream |= *stream;
     }
-    let tag = ir.effort_str().map(str::to_string);
+    // 推理等级日志标注:客户端原值优先(max/x-tier 等非标档位不丢),
+    // 无原值退归一化串(Anthropic/Gemini 的 budget 数字已在解析处存原值)
+    let tag = ir
+        .reasoning_raw
+        .clone()
+        .or_else(|| ir.effort_str().map(str::to_string));
     let is_stream = ir.stream;
     let model_in = ir.model.clone();
     let req_snapshot = snapshot(&state, &raw_body);

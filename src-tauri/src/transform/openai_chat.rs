@@ -141,6 +141,11 @@ pub fn parse_request(v: &Value) -> Result<CanonicalRequest, String> {
             _ => {}
         }
     }
+    // 原值存档:归一化会丢掉 max 等非标档位,日志按客户端原值显示
+    ir.reasoning_raw = obj
+        .get("reasoning_effort")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     if let Some(effort) = obj
         .get("reasoning_effort")
         .and_then(Value::as_str)
