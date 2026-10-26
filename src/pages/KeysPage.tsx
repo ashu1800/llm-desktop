@@ -14,7 +14,9 @@ import {
   Power,
   RotateCcw,
   Route,
+  Smartphone,
   Trash2,
+  Zap,
 } from "lucide-react";
 import {
   DndContext,
@@ -32,15 +34,13 @@ import { api, maskKey } from "@/lib/api";
 import {
   useApiKeys,
   useChannels,
+  useLanIp,
   useSettings,
 } from "@/hooks/use-gateway";
 import type { ApiKey, Channel } from "@/lib/types";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/EmptyState";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,6 +54,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
 function formatTs(ts: number | null): string {
@@ -228,16 +235,36 @@ function ModelRoutingEditor({
       <div className="flex items-center justify-between gap-2">
         <Label>
           可用模型<span className="ml-0.5 text-destructive">*</span>
-          <span className="ml-1 text-muted-foreground">
-            (来自所选渠道的支持列表;必须至少勾选一个)
+          <span className="ml-1 text-muted-foreground text-xs font-normal">
+            (勾选后生效)
           </span>
         </Label>
-        <Input
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          placeholder="筛选模型…"
-          className="h-7 w-36 font-mono text-xs"
-        />
+        <div className="flex items-center gap-1.5">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+            onClick={() => onModelsChange(Array.from(new Set([...models, ...visible])))}
+          >
+            全选
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-destructive"
+            onClick={() => onModelsChange([])}
+          >
+            清空
+          </Button>
+          <Input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="筛选模型…"
+            className="h-7 w-28 font-mono text-xs"
+          />
+        </div>
       </div>
 
       {candidates.length === 0 ? (
@@ -246,10 +273,17 @@ function ModelRoutingEditor({
           请先到渠道管理为渠道配置支持的模型
         </p>
       ) : (
-        <div className="max-h-52 space-y-0.5 overflow-auto rounded-md border p-2">
+        <div className="max-h-52 space-y-1 overflow-auto rounded-xl border border-border/80 bg-background/50 p-2 shadow-2xs">
           {visible.map((m) => (
             <div key={m} className="space-y-1">
-              <div className="flex items-center gap-2 rounded px-1 py-0.5 text-xs hover:bg-accent/50">
+              <div
+                className={cn(
+                  "flex items-center gap-2 rounded-lg px-2 py-1 text-xs transition-colors",
+                  inSet.has(m)
+                    ? "border border-primary/30 bg-primary/5 text-foreground font-medium"
+                    : "hover:bg-accent/50 text-muted-foreground",
+                )}
+              >
                 <input
                   type="checkbox"
                   checked={inSet.has(m)}
@@ -581,17 +615,22 @@ function KeyDialog({
                   {(channels ?? []).map((ch) => (
                     <label
                       key={ch.id}
-                      className="flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm hover:bg-accent/50"
+                      className={cn(
+                        "flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs transition-all shadow-2xs select-none",
+                        selected.has(ch.id)
+                          ? "border-primary/50 bg-primary/5 font-medium text-foreground"
+                          : "border-border/80 bg-background/60 text-muted-foreground hover:bg-muted/40",
+                      )}
                     >
                       <input
                         type="checkbox"
                         checked={selected.has(ch.id)}
                         onChange={() => toggleChannel(ch.id)}
-                        className="accent-primary"
+                        className="h-3.5 w-3.5 accent-primary"
                       />
                       <span className="truncate">{ch.name}</span>
                       {!ch.enabled && (
-                        <Badge variant="muted" className="ml-auto px-1">
+                        <Badge variant="muted" className="ml-auto px-1 text-[10px]">
                           已停用
                         </Badge>
                       )}
@@ -615,7 +654,8 @@ function KeyDialog({
                           <SortableChannel
                             key={c.id}
                             id={c.id}
-                            name={`${i + 1}. ${c.name}`}
+                            orderIndex={i + 1}
+                            name={c.name}
                             onRemove={() => toggleChannel(c.id)}
                           />
                         ))}
@@ -688,15 +728,232 @@ function KeyDialog({
   );
 }
 
+interface TestKeyResult {
+  ok: boolean;
+  status: number;
+  latencyMs: number;
+  model: string;
+  reply?: string;
+  tokens?: { prompt: number; completion: number };
+  error?: string;
+}
+
+function TestKeyDialog({
+  apiKey,
+  onClose,
+}: {
+  apiKey: ApiKey | null;
+  onClose: () => void;
+}) {
+  const { data: settings } = useSettings();
+  const open = apiKey !== null;
+  const [model, setModel] = useState("");
+  const [prompt, setPrompt] = useState("hi");
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState<TestKeyResult | null>(null);
+
+  useEffect(() => {
+    if (apiKey) {
+      setModel(apiKey.models[0] ?? "");
+      setPrompt("hi");
+      setResult(null);
+    }
+  }, [apiKey?.id]);
+
+  const runTest = async () => {
+    if (!apiKey || !settings) return;
+    setTesting(true);
+    setResult(null);
+    const host = `http://${settings.listenAddr === "0.0.0.0" ? "127.0.0.1" : settings.listenAddr}:${settings.port}/v1/chat/completions`;
+    const t0 = performance.now();
+    try {
+      const resp = await fetch(host, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey.key}`,
+        },
+        body: JSON.stringify({
+          model: model || undefined,
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: 40,
+        }),
+      });
+      const latencyMs = Math.round(performance.now() - t0);
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        setResult({
+          ok: false,
+          status: resp.status,
+          latencyMs,
+          model,
+          error: data?.error?.message || `HTTP ${resp.status} ${resp.statusText}`,
+        });
+      } else {
+        const reply = data?.choices?.[0]?.message?.content || "";
+        setResult({
+          ok: true,
+          status: resp.status,
+          latencyMs,
+          model: data?.model || model,
+          reply,
+          tokens: data?.usage
+            ? {
+                prompt: data.usage.prompt_tokens,
+                completion: data.usage.completion_tokens,
+              }
+            : undefined,
+        });
+        toast.success(`自检成功 (${latencyMs}ms)`);
+      }
+    } catch (e) {
+      const latencyMs = Math.round(performance.now() - t0);
+      setResult({
+        ok: false,
+        status: 0,
+        latencyMs,
+        model,
+        error: String(e),
+      });
+      toast.error(`自检失败: ${e}`);
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Zap className="h-4 w-4 text-amber-500" />
+            <span>密钥端到端自检诊断</span>
+          </DialogTitle>
+          <DialogDescription>
+            以密钥「{apiKey?.name}」身份向网关发送真实调用，检验鉴权、模型匹配与路由
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid gap-4 py-1">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">测试模型</Label>
+              {apiKey && apiKey.models.length > 0 ? (
+                <Select value={model} onValueChange={setModel}>
+                  <SelectTrigger className="h-8 font-mono text-xs">
+                    <SelectValue placeholder="选择模型" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {apiKey.models.map((m) => (
+                      <SelectItem
+                        key={m}
+                        value={m}
+                        className="font-mono text-xs"
+                      >
+                        {m}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder="输入任意模型名"
+                  className="h-8 font-mono text-xs"
+                />
+              )}
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">测试消息</Label>
+              <Input
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                placeholder="Prompt"
+                className="h-8 text-xs"
+              />
+            </div>
+          </div>
+
+          {result && (
+            <div className="space-y-3 rounded-xl border border-border/80 bg-muted/20 p-3.5 shadow-2xs">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-2">
+                <div className="flex items-center gap-2 text-xs">
+                  {result.ok ? (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                      ✓ 认证与路由成功 ({result.status})
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-destructive/30 bg-destructive/10 px-2 py-0.5 text-[11px] font-semibold text-destructive">
+                      ✗ 调用失败 ({result.status})
+                    </span>
+                  )}
+                  <span className="font-mono text-[11px] text-muted-foreground">
+                    ⚡ {result.latencyMs}ms
+                  </span>
+                </div>
+                {result.tokens && (
+                  <span className="font-mono text-[11px] text-muted-foreground">
+                    Token: {result.tokens.prompt} 入 · {result.tokens.completion} 出
+                  </span>
+                )}
+              </div>
+
+              {result.ok ? (
+                <div className="space-y-1">
+                  <span className="text-[11px] text-muted-foreground">回复内容:</span>
+                  <div className="max-h-36 overflow-y-auto rounded-lg border border-border/70 bg-background/80 p-2.5 font-mono text-xs leading-relaxed text-foreground select-text">
+                    {result.reply || "(无文本输出)"}
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-2.5 text-xs text-destructive">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span className="break-all font-mono leading-relaxed">
+                    {result.error}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={onClose}>
+            关闭
+          </Button>
+          <Button
+            size="sm"
+            disabled={testing || !model.trim()}
+            onClick={runTest}
+            className="gap-1.5 shadow-2xs"
+          >
+            {testing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Zap className="h-3.5 w-3.5 text-amber-500" />
+            )}
+            {testing ? "正在调用网关…" : "开始自检"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ---------- 密钥页 ----------
 
 export function KeysPage() {
   const { data: keys, isLoading } = useApiKeys();
   const { data: channels } = useChannels();
   const { data: settings } = useSettings();
+  const { data: lanIp } = useLanIp();
   const qc = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<ApiKey | null>(null);
+  const [testTargetKey, setTestTargetKey] = useState<ApiKey | null>(null);
+  // 删除二次确认:主题化弹窗(取代 window.confirm)
+  const confirm = useConfirm();
 
   const emptyKey = useMemo(
     () => () =>
@@ -719,8 +976,12 @@ export function KeysPage() {
 
   // 客户端接入地址:监听地址+端口+/v1,复制后贴给任意 OpenAI 兼容客户端即可用
   const [copiedBase, setCopiedBase] = useState(false);
+  const [copiedLan, setCopiedLan] = useState(false);
   const [copiedKeyId, setCopiedKeyId] = useState<number | null>(null);
   const baseURL = `http://${settings?.listenAddr ?? "127.0.0.1"}:${settings?.port ?? 8787}/v1`;
+  const isLan = settings?.listenAddr === "0.0.0.0";
+  const lanURL = lanIp ? `http://${lanIp}:${settings?.port ?? 8787}/v1` : null;
+
   const copyBaseURL = async () => {
     try {
       await navigator.clipboard.writeText(baseURL);
@@ -729,6 +990,18 @@ export function KeysPage() {
       setTimeout(() => setCopiedBase(false), 1500);
     } catch {
       toast.error("复制失败,请手动复制: " + baseURL);
+    }
+  };
+
+  const copyLanURL = async () => {
+    if (!lanURL) return;
+    try {
+      await navigator.clipboard.writeText(lanURL);
+      setCopiedLan(true);
+      toast.success(`局域网接入地址已复制: ${lanURL}`);
+      setTimeout(() => setCopiedLan(false), 1500);
+    } catch {
+      toast.error("复制失败");
     }
   };
 
@@ -752,6 +1025,22 @@ export function KeysPage() {
                 <Copy className="h-3 w-3 text-muted-foreground/70" />
               )}
             </button>
+            {isLan && lanURL && (
+              <button
+                onClick={copyLanURL}
+                title="同 Wi-Fi 局域网设备(手机/iPad)接入地址，点击一键复制"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-500/35 bg-indigo-500/10 px-2.5 py-1.5 text-xs font-medium text-indigo-600 dark:text-indigo-400 transition-all hover:bg-indigo-500/20 active:scale-95 shadow-2xs"
+              >
+                <Smartphone className="h-3.5 w-3.5" />
+                <span className="text-muted-foreground">局域网</span>
+                <span className="font-mono font-medium text-foreground">{lanURL}</span>
+                {copiedLan ? (
+                  <Check className="h-3 w-3 text-success" />
+                ) : (
+                  <Copy className="h-3 w-3 text-muted-foreground/70" />
+                )}
+              </button>
+            )}
             <Button
               size="sm"
               onClick={() => {
@@ -769,11 +1058,23 @@ export function KeysPage() {
               加载中…
             </div>
           ) : !keys?.length ? (
-            <div className="flex flex-col items-center gap-2 py-10 text-center">
-              <KeyRound className="h-8 w-8 text-muted-foreground/50" />
-              <p className="text-sm text-muted-foreground">
-                还没有密钥,创建后分发给客户端使用
-              </p>
+            <div className="py-6">
+              <EmptyState
+                icon={KeyRound}
+                title="暂无客户端调用密钥"
+                description="创建您的第一个 API 认证密钥，分发给 Claude Code、Cursor、Cherry Studio 等客户端接入"
+              >
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setEditing(emptyKey());
+                    setDialogOpen(true);
+                  }}
+                  className="gap-1.5 shadow-2xs"
+                >
+                  <Plus className="h-4 w-4" /> 创建第一个密钥
+                </Button>
+              </EmptyState>
             </div>
           ) : (
             <table className="w-full table-fixed text-sm">
@@ -913,6 +1214,15 @@ export function KeysPage() {
                         <Button
                           variant="ghost"
                           size="icon"
+                          title="端到端路由自检诊断"
+                          className="hover:bg-amber-500/15 hover:text-amber-600 dark:hover:text-amber-400"
+                          onClick={() => setTestTargetKey(k)}
+                        >
+                          <Zap className="h-3.5 w-3.5 text-amber-500" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
                           title={k.enabled ? "禁用" : "启用"}
                           onClick={async () => {
                             try {
@@ -942,9 +1252,10 @@ export function KeysPage() {
                           title="删除"
                           onClick={async () => {
                             if (
-                              !window.confirm(
-                                `确认删除密钥「${k.name}」?使用该密钥的客户端将立即无法访问,且不可恢复。`,
-                              )
+                              !(await confirm({
+                                title: "删除密钥",
+                                message: `确认删除密钥「${k.name}」?使用该密钥的客户端将立即无法访问,且不可恢复。`,
+                              }))
                             )
                               return;
                             try {
@@ -971,6 +1282,10 @@ export function KeysPage() {
         open={dialogOpen}
         editing={editing}
         onClose={() => setDialogOpen(false)}
+      />
+      <TestKeyDialog
+        apiKey={testTargetKey}
+        onClose={() => setTestTargetKey(null)}
       />
       <div className={cn("h-2")} />
     </div>

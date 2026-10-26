@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Coins, History, Pencil, Plus, Search, Sparkles, Trash2, Wand2, X } from "lucide-react";
+import { Calculator, Coins, History, Pencil, Plus, Search, Sparkles, Trash2, Wand2, X } from "lucide-react";
 import { api } from "@/lib/api";
+import { matchPrice } from "@/lib/format";
 import { usePrices, useUnpricedModels } from "@/hooks/use-gateway";
 import type { PriceEntry } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import {
   Card,
   CardContent,
@@ -13,6 +15,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/EmptyState";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -77,14 +81,28 @@ function PriceDialog({
 }) {
   const qc = useQueryClient();
   const [form, setForm] = useState<PriceEntry>(editing ?? ZERO_PRICE);
-  useEffect(() => setForm(editing ?? ZERO_PRICE), [editing]);
+  const [usdEnabled, setUsdEnabled] = useState(false);
+
+  useEffect(() => {
+    setForm(editing ?? ZERO_PRICE);
+    setUsdEnabled(editing?.inputUsd != null);
+  }, [editing, open]);
 
   const save = useMutation({
     mutationFn: async () => {
-      if (quick) {
-        return api.quickPriceAndBackfill(form);
+      const payload = { ...form };
+      if (!usdEnabled) {
+        payload.inputUsd = null;
+        payload.outputUsd = null;
+        payload.cacheReadUsd = null;
+        payload.cacheWriteUsd = null;
+      } else {
+        payload.inputUsd = payload.inputUsd ?? 0;
       }
-      await api.upsertModelPrice(form);
+      if (quick) {
+        return api.quickPriceAndBackfill(payload);
+      }
+      await api.upsertModelPrice(payload);
       return null;
     },
     onSuccess: (filled) => {
@@ -102,8 +120,6 @@ function PriceDialog({
 
   if (!open) return null;
   const patch = (p: Partial<PriceEntry>) => setForm({ ...form, ...p });
-  // 美元组是否启用:任一美元价已配即视为启用(以输入价为准)
-  const usdEnabled = form.inputUsd != null;
 
   // 人民币字段(必填,元/M);仅完整数值回写,"0." 中间态不 patch 防吞小数点
   const cnyField = (
@@ -193,12 +209,14 @@ function PriceDialog({
               输入价清空 = 整组取消且同步清空其余三价(后端 has_usd 只看输入价,
               残留三价会静默落库不生效且不可见) */}
           <div className="space-y-2">
-            <label className="flex w-fit cursor-pointer items-center gap-2 text-sm">
+            <label className="flex w-fit cursor-pointer items-center gap-2 text-sm select-none">
               <input
                 type="checkbox"
                 checked={usdEnabled}
                 onChange={(e) => {
-                  if (e.target.checked) {
+                  const checked = e.target.checked;
+                  setUsdEnabled(checked);
+                  if (checked) {
                     patch({ inputUsd: form.inputUsd ?? 0 });
                   } else {
                     patch({
@@ -249,6 +267,34 @@ export function PricingPage() {
   const [editing, setEditing] = useState<PriceEntry | null>(null);
   const [quick, setQuick] = useState(false);
   const [search, setSearch] = useState("");
+  const [calcOpen, setCalcOpen] = useState(false);
+  const [calcModel, setCalcModel] = useState("claude-3-5-sonnet");
+  const [calcPrompt, setCalcPrompt] = useState(10000);
+  const [calcCompletion, setCalcCompletion] = useState(2000);
+  const [calcCacheRead, setCalcCacheRead] = useState(0);
+  // 删除二次确认:主题化弹窗(取代 window.confirm)
+  const confirm = useConfirm();
+
+  const calcMatched = useMemo(() => {
+    if (!prices || !calcModel.trim()) return null;
+    return matchPrice(prices, calcModel.trim());
+  }, [prices, calcModel]);
+
+  const calcEstimatedCost = useMemo(() => {
+    if (!calcMatched) return null;
+    const netPrompt = Math.max(0, calcPrompt - calcCacheRead);
+    const cny =
+      (netPrompt / 1_000_000) * calcMatched.input +
+      (calcCompletion / 1_000_000) * calcMatched.output +
+      (calcCacheRead / 1_000_000) * calcMatched.cacheRead;
+    const usd =
+      calcMatched.inputUsd != null
+        ? (netPrompt / 1_000_000) * (calcMatched.inputUsd ?? 0) +
+          (calcCompletion / 1_000_000) * (calcMatched.outputUsd ?? 0) +
+          (calcCacheRead / 1_000_000) * (calcMatched.cacheReadUsd ?? 0)
+        : null;
+    return { cny, usd };
+  }, [calcMatched, calcPrompt, calcCompletion, calcCacheRead]);
 
   const filteredPrices = useMemo(() => {
     if (!prices) return [];
@@ -392,6 +438,15 @@ export function PricingPage() {
             <Button
               size="sm"
               variant="outline"
+              onClick={() => setCalcOpen(!calcOpen)}
+              className={cn("gap-1.5 shadow-2xs text-xs", calcOpen && "bg-accent text-accent-foreground")}
+              title="测算预估费用"
+            >
+              <Calculator className="h-3.5 w-3.5 text-primary" /> 费用测算
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
               disabled={backfill.isPending}
               onClick={() => backfill.mutate()}
             >
@@ -402,21 +457,132 @@ export function PricingPage() {
             </Button>
           </div>
         </CardHeader>
+
+        {/* 费用测算器展开面板 */}
+        {calcOpen && (
+          <div className="mx-6 mb-4 space-y-3 rounded-xl border border-border/80 bg-muted/20 p-4 shadow-inner">
+            <div className="flex items-center justify-between border-b border-border/50 pb-2">
+              <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                <Calculator className="h-4 w-4 text-primary" />
+                单次请求费用测算器
+              </span>
+              <span className="text-[11px] text-muted-foreground">
+                基于当前定价规则实时模拟计算
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+              <div className="space-y-1">
+                <Label className="text-[11px] text-muted-foreground">目标模型</Label>
+                <Input
+                  value={calcModel}
+                  onChange={(e) => setCalcModel(e.target.value)}
+                  placeholder="例如: gpt-4o"
+                  className="h-8 bg-background/80 font-mono text-xs"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-[11px] text-muted-foreground">输入 Tokens (Prompt)</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="1000"
+                  value={calcPrompt}
+                  onChange={(e) => setCalcPrompt(Number(e.target.value) || 0)}
+                  className="h-8 bg-background/80 font-mono text-xs"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-[11px] text-muted-foreground">输出 Tokens (Output)</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="500"
+                  value={calcCompletion}
+                  onChange={(e) => setCalcCompletion(Number(e.target.value) || 0)}
+                  className="h-8 bg-background/80 font-mono text-xs"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-[11px] text-muted-foreground">缓存命中 Tokens</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="1000"
+                  value={calcCacheRead}
+                  onChange={(e) => setCalcCacheRead(Number(e.target.value) || 0)}
+                  className="h-8 bg-background/80 font-mono text-xs"
+                />
+              </div>
+            </div>
+
+            {/* 测算结果条 */}
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/80 bg-background/90 p-3 shadow-2xs">
+              <div className="flex items-center gap-2 text-xs">
+                {calcMatched ? (
+                  <>
+                    <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                      ✓ 命中规则: {calcMatched.pattern}
+                    </span>
+                    <span className="text-[11px] text-muted-foreground">
+                      (输入 ¥{calcMatched.input}/M · 输出 ¥{calcMatched.output}/M)
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
+                    ⚠️ 未在定价表中匹配到规则，若产生请求将无法计入费用
+                  </span>
+                )}
+              </div>
+              {calcEstimatedCost && (
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-muted-foreground">预估费用:</span>
+                  <span className="font-mono text-base font-bold text-foreground">
+                    ¥{calcEstimatedCost.cny.toFixed(5)}
+                  </span>
+                  {calcEstimatedCost.usd != null && (
+                    <span className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 font-mono text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                      ${calcEstimatedCost.usd.toFixed(5)}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
         <CardContent>
           {isLoading ? (
             <div className="py-10 text-center text-sm text-muted-foreground">
               加载中…
             </div>
           ) : !prices?.length ? (
-            <div className="flex flex-col items-center gap-2 py-10 text-center">
-              <Coins className="h-8 w-8 text-muted-foreground/50" />
-              <p className="text-sm text-muted-foreground">
-                定价表为空,费用暂不计入;新增条目后可一键回填历史费用
-              </p>
+            <div className="py-6">
+              <EmptyState
+                icon={Coins}
+                title="定价规则表为空"
+                description="添加模型价格规则后，网关在处理请求时将自动折算并回填每笔请求的 Token 费用"
+              >
+                <Button size="sm" onClick={openNew} className="gap-1.5 shadow-2xs">
+                  <Plus className="h-4 w-4" /> 新增第一条定价
+                </Button>
+              </EmptyState>
             </div>
           ) : !filteredPrices.length ? (
-            <div className="py-10 text-center text-sm text-muted-foreground">
-              未找到匹配「{search}」的定价规则
+            <div className="py-6">
+              <EmptyState
+                icon={Search}
+                title={`未找到匹配「${search}」的定价规则`}
+                description="请检查搜索关键字或通配符规则，您可以清空搜索框以查看全部定价"
+              >
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSearch("")}
+                  className="gap-1.5 shadow-2xs"
+                >
+                  <X className="h-3.5 w-3.5" /> 清空搜索条件
+                </Button>
+              </EmptyState>
             </div>
           ) : (
             <table className="w-full table-fixed text-sm">
@@ -479,9 +645,10 @@ export function PricingPage() {
                           onClick={async () => {
                             // 删除后相关模型请求不再计费:二次确认
                             if (
-                              !window.confirm(
-                                `确认删除定价「${p.pattern}」?相关请求将不再计入费用。`,
-                              )
+                              !(await confirm({
+                                title: "删除定价",
+                                message: `确认删除定价「${p.pattern}」?相关请求将不再计入费用。`,
+                              }))
                             )
                               return;
                             try {

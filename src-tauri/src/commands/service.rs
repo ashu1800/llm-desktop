@@ -18,6 +18,13 @@ pub async fn get_service_status(state: State<'_, AppState>) -> Result<ServiceSta
 }
 
 #[tauri::command]
+pub fn get_lan_ip() -> Option<String> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    Some(socket.local_addr().ok()?.ip().to_string())
+}
+
+#[tauri::command]
 pub async fn start_service(
     state: State<'_, AppState>,
     app: AppHandle,

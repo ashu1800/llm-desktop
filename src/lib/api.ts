@@ -4,6 +4,7 @@ import type {
   AppSettings,
   BreakerStatus,
   Channel,
+  DatabaseStats,
   PriceEntry,
   ServiceStatus,
   TestChannelResult,
@@ -25,6 +26,7 @@ export const api = {
   isPortAvailable: (listenAddr: string, port: number) =>
     invoke<boolean>("is_port_available", { listenAddr, port }),
   getServiceStatus: () => invoke<ServiceStatus>("get_service_status"),
+  getLanIp: () => invoke<string | null>("get_lan_ip"),
   startService: () => invoke<ServiceStatus>("start_service"),
   stopService: () => invoke<ServiceStatus>("stop_service"),
 
@@ -86,6 +88,8 @@ export const api = {
     invoke<LogDetail | null>("get_request_log", { id }),
   getStats: (filter: LogFilter) => invoke<StatsSummary>("get_stats", { filter }),
   clearLogs: () => invoke<void>("clear_logs"),
+  getDatabaseStats: () => invoke<DatabaseStats>("get_database_stats"),
+  vacuumDatabase: () => invoke<DatabaseStats>("vacuum_database"),
   listClients: () => invoke<string[]>("list_clients"),
   listLogModels: () => invoke<string[]>("list_models"),
   /** 弹图片选择框,规范化为 64px PNG dataURL;取消返回 null */

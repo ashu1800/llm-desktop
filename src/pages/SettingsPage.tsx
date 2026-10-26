@@ -1,8 +1,20 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { motion } from "framer-motion";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AnimatePresence, motion } from "framer-motion";
 import { toast } from "sonner";
-import { AlertTriangle, Check, Download, Minimize2, Power, Save, ShieldCheck, Trash2, Upload } from "lucide-react";
+import {
+  AlertTriangle,
+  Database,
+  Download,
+  Loader2,
+  Minimize2,
+  Power,
+  Save,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import { api } from "@/lib/api";
 import { useSettings } from "@/hooks/use-gateway";
 import { useUpdater } from "@/hooks/use-updater";
@@ -142,6 +154,12 @@ const SETTING_TABS = [
 
 type SettingTab = (typeof SETTING_TABS)[number]["key"];
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
 export function SettingsPage() {
   const { data: settings, isLoading } = useSettings();
   const qc = useQueryClient();
@@ -158,6 +176,21 @@ export function SettingsPage() {
   // settings 会被外部修改(顶栏主题/导入配置/settingsChanged),若直接与
   // settings 比较,外部变更会被误报为"未保存修改",点保存会回滚它们
   const [baseSnapshot, setBaseSnapshot] = useState<string | null>(null);
+
+  const { data: dbStats } = useQuery({
+    queryKey: ["db-stats"],
+    queryFn: api.getDatabaseStats,
+    enabled: tab === "data",
+  });
+
+  const vacuumMut = useMutation({
+    mutationFn: api.vacuumDatabase,
+    onSuccess: (res) => {
+      qc.setQueryData(["db-stats"], res);
+      toast.success("数据库整理与压缩已完成");
+    },
+    onError: (e) => toast.error(`VACUUM 异常: ${e}`),
+  });
 
   useEffect(() => {
     // settings 重取且表单无本地修改时跟随刷新;有修改则保留用户输入
@@ -260,33 +293,36 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl pb-16">
-      {/* 分类选择夹: 物理弹簧滑动分段控制器 */}
-      <div className="relative mb-5 flex items-center gap-1 rounded-xl border border-border/80 bg-muted/50 p-1 shadow-2xs">
-        {SETTING_TABS.map((t) => {
-          const isActive = tab === t.key;
-          return (
-            <button
-              key={t.key}
-              onClick={() => setTab(t.key)}
-              className={cn(
-                "relative flex-1 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors select-none",
-                isActive
-                  ? "text-foreground font-semibold"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {isActive && (
-                <motion.span
-                  layoutId="active-settings-tab"
-                  className="absolute inset-0 rounded-lg bg-background shadow-xs ring-1 ring-border/80"
-                  transition={{ type: "spring", stiffness: 450, damping: 35 }}
-                />
-              )}
-              <span className="relative z-10">{t.label}</span>
-            </button>
-          );
-        })}
+    <div className="mx-auto max-w-3xl pb-10">
+      {/* 分类选择夹: 钉在滚动区顶部的固定分段控制器——下方内容经半透明模糊遮罩滚过,
+          -mx-6/px-6 抵消主区 p-6 内边距使遮罩贴满左右,与底部保存条形成对称固定栏 */}
+      <div className="sticky top-0 z-10 -mx-6 mb-5 border-b border-border/60 bg-background/95 px-6 py-3 backdrop-blur-sm">
+        <div className="relative flex items-center gap-1 rounded-xl border border-border/80 bg-muted/50 p-1 shadow-2xs">
+          {SETTING_TABS.map((t) => {
+            const isActive = tab === t.key;
+            return (
+              <button
+                key={t.key}
+                onClick={() => setTab(t.key)}
+                className={cn(
+                  "relative flex-1 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors select-none",
+                  isActive
+                    ? "text-foreground font-semibold"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {isActive && (
+                  <motion.span
+                    layoutId="active-settings-tab"
+                    className="absolute inset-0 rounded-lg bg-background shadow-xs ring-1 ring-border/80"
+                    transition={{ type: "spring", stiffness: 450, damping: 35 }}
+                  />
+                )}
+                <span className="relative z-10">{t.label}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <div className="space-y-6">
@@ -477,6 +513,48 @@ export function SettingsPage() {
                   />
                 </div>
               </div>
+
+              {/* SQLite 存储资产与整理压缩 */}
+              <div className="mt-4 border-t border-border/50 pt-3.5">
+                <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <Database className="h-4 w-4 text-primary" />
+                      <span className="text-xs font-semibold text-foreground">
+                        SQLite 存储资产
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 font-mono text-xs text-muted-foreground">
+                      <span>
+                        主库: {dbStats ? formatBytes(dbStats.dbSizeBytes) : "—"}
+                      </span>
+                      <span>·</span>
+                      <span>
+                        WAL 缓存: {dbStats ? formatBytes(dbStats.walSizeBytes) : "—"}
+                      </span>
+                      <span>·</span>
+                      <span>
+                        历史日志: {dbStats ? `${dbStats.logCount.toLocaleString()} 条` : "—"}
+                      </span>
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={vacuumMut.isPending}
+                    onClick={() => vacuumMut.mutate()}
+                    className="gap-1.5 text-xs shadow-2xs"
+                    title="执行 SQLite VACUUM 回收被删除日志所占用的空闲磁盘碎片"
+                  >
+                    {vacuumMut.isPending ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Sparkles className="h-3.5 w-3.5 text-primary" />
+                    )}
+                    {vacuumMut.isPending ? "正在压缩整理…" : "整理压缩数据库 (VACUUM)"}
+                  </Button>
+                </div>
+              </div>
             </SectionCard>
 
             <SectionCard title="数据备份与迁移">
@@ -646,38 +724,41 @@ export function SettingsPage() {
         )}
       </div>
 
-      {/* 底部保存条:所有分类共用,修改不丢失 */}
-      <div className="sticky bottom-0 -mx-6 mt-6 flex items-center justify-between border-t bg-background/95 px-6 py-3 backdrop-blur shadow-sm">
-        {dirty ? (
-          <div className="flex items-center gap-2 text-xs font-medium text-amber-600 dark:text-amber-400">
-            <span className="relative flex h-2 w-2">
-              <span className="absolute h-full w-full animate-ping rounded-full bg-amber-500 opacity-75" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-500" />
+      {/* 保存悬浮按钮(FAB):仅在有未保存更改时浮现于右下角,保存成功后随 toast 收起,
+          不再像旧底部条那样常驻遮挡内容;固定定位相对窗口,滚动与层级(z-20<弹窗 z-50)互不干扰 */}
+      <AnimatePresence>
+        {(dirty || saving) && (
+          <motion.div
+            key="save-fab"
+            initial={{ opacity: 0, y: 10, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 10, scale: 0.9 }}
+            transition={{ duration: 0.16, ease: "easeOut" }}
+            className="fixed right-6 bottom-6 z-20 flex items-center gap-2.5"
+          >
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-background/90 px-3 py-1 text-xs font-medium text-amber-600 shadow-2xs backdrop-blur-sm dark:text-amber-400">
+              <span className="relative flex h-1.5 w-1.5">
+                <span className="absolute h-full w-full animate-ping rounded-full bg-amber-500 opacity-75" />
+                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-amber-500" />
+              </span>
+              {saving ? "保存中…" : "有未保存的更改"}
             </span>
-            <span>当前包含未保存的配置更改</span>
-          </div>
-        ) : (
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Check className="h-3.5 w-3.5 text-success" />
-            <span>所有修改已安全落盘生效</span>
-          </div>
+            <Button
+              onClick={save}
+              disabled={saving || !dirty}
+              title="保存设置"
+              aria-label="保存设置"
+              className="h-12 w-12 rounded-full shadow-lg ring-4 ring-primary/15 transition-transform hover:scale-105 active:scale-95"
+            >
+              {saving ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                <Save className="h-5 w-5" />
+              )}
+            </Button>
+          </motion.div>
         )}
-        <Button
-          onClick={save}
-          disabled={!dirty || saving}
-          className={cn(
-            "transition-all duration-200",
-            dirty && "shadow-xs ring-2 ring-primary/20",
-          )}
-        >
-          {saving ? (
-            <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-          ) : (
-            <Save className="h-4 w-4" />
-          )}
-          保存设置
-        </Button>
-      </div>
+      </AnimatePresence>
 
       {/* 0.0.0.0 二次确认 */}
       <Dialog open={confirmLanOpen} onOpenChange={setConfirmLanOpen}>

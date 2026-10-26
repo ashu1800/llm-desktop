@@ -7,6 +7,8 @@ import { useAppStore } from "@/stores/app-store";
 import { cn } from "@/lib/utils";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
+import { CommandPalette } from "@/components/CommandPalette";
+import { ConfirmProvider } from "@/components/ConfirmDialog";
 import { UpdateDialog } from "@/components/UpdateDialog";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { ChannelsPage } from "@/pages/ChannelsPage";
@@ -18,6 +20,7 @@ import type { PageKey } from "@/lib/types";
 export default function App() {
   const [page, setPage] = useState<PageKey>("dashboard");
   const [updateOpen, setUpdateOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   useGatewayEvents();
   useThemeEffect();
   const resolvedTheme = useAppStore((s) => s.resolvedTheme);
@@ -35,10 +38,15 @@ export default function App() {
     }
   }, [updateState.phase, updateState.nextVersion]);
 
-  // 全局数字快捷键: Ctrl/Cmd + 1~5 切换页面
+  // 全局快捷键: Ctrl/Cmd + K 唤起指令中心; Ctrl/Cmd + 1~5 切换页面
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+        if (e.key === "k" || e.key === "K") {
+          e.preventDefault();
+          setPaletteOpen((prev) => !prev);
+          return;
+        }
         const keyMap: Record<string, PageKey> = {
           "1": "dashboard",
           "2": "channels",
@@ -63,7 +71,8 @@ export default function App() {
     (updateState.phase === "error" && updateState.pendingUpdate);
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <ConfirmProvider>
+      <div className="flex h-screen overflow-hidden">
       <Sidebar
         page={page}
         onNavigate={setPage}
@@ -99,12 +108,19 @@ export default function App() {
           </AnimatePresence>
         </main>
       </div>
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        onNavigate={setPage}
+        onOpenUpdate={() => setUpdateOpen(true)}
+      />
       <UpdateDialog
         open={updateOpen}
         onOpenChange={setUpdateOpen}
         updater={updater}
       />
       <Toaster position="top-center" richColors theme={resolvedTheme} />
-    </div>
+      </div>
+    </ConfirmProvider>
   );
 }

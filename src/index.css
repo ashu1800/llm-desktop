@@ -112,6 +112,45 @@
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.6; transform: scale(0.88); }
 }
+
+/* 新请求入场流光与微发光扫光动效 */
+@keyframes log-flash-success {
+  0% {
+    background-color: hsl(var(--primary) / 0.28);
+    box-shadow: inset 3.5px 0 0 0 hsl(var(--primary)), 0 0 16px hsl(var(--primary) / 0.2);
+  }
+  35% {
+    background-color: hsl(var(--primary) / 0.16);
+    box-shadow: inset 3.5px 0 0 0 hsl(var(--primary)), 0 0 10px hsl(var(--primary) / 0.12);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 0 transparent, 0 0 0 transparent;
+  }
+}
+
+@keyframes log-flash-error {
+  0% {
+    background-color: hsl(var(--destructive) / 0.32);
+    box-shadow: inset 3.5px 0 0 0 hsl(var(--destructive)), 0 0 18px hsl(var(--destructive) / 0.25);
+  }
+  35% {
+    background-color: hsl(var(--destructive) / 0.18);
+    box-shadow: inset 3.5px 0 0 0 hsl(var(--destructive)), 0 0 10px hsl(var(--destructive) / 0.12);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 0 transparent, 0 0 0 transparent;
+  }
+}
+
+.animate-log-flash-success {
+  animation: log-flash-success 2.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-log-flash-error {
+  animation: log-flash-error 2.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;

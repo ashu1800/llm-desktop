@@ -25,8 +25,12 @@ import {
   RefreshCw,
   RotateCcw,
   ScrollText,
+  Search,
+  Terminal,
+  X,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { EmptyState } from "@/components/EmptyState";
 import {
   useApiKeys,
   useBreakerStates,
@@ -34,6 +38,7 @@ import {
   useLogs,
   useLogModels,
   useStats,
+  useSettings,
   useUnpricedModels,
 } from "@/hooks/use-gateway";
 import {
@@ -70,6 +75,7 @@ import { useAppStore } from "@/stores/app-store";
 import { ProtocolBadge } from "@/components/ProtocolBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -408,6 +414,78 @@ function KvBox({ k, v }: { k: string; v: React.ReactNode }) {
   );
 }
 
+function highlightJson(json: string): React.ReactNode {
+  const tokenRegex =
+    /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?|[{}[\],:])/g;
+
+  let lastIndex = 0;
+  const elements: React.ReactNode[] = [];
+  let match: RegExpExecArray | null;
+
+  while ((match = tokenRegex.exec(json)) !== null) {
+    if (match.index > lastIndex) {
+      elements.push(json.slice(lastIndex, match.index));
+    }
+    const token = match[0];
+    const key = match.index;
+
+    if (token.endsWith(":")) {
+      const colonIdx = token.lastIndexOf(":");
+      const keyStr = token.slice(0, colonIdx);
+      elements.push(
+        <span key={key} className="font-semibold text-sky-600 dark:text-sky-400">
+          {keyStr}
+        </span>,
+      );
+      elements.push(
+        <span key={`${key}-colon`} className="text-muted-foreground/60">
+          :
+        </span>,
+      );
+    } else if (token.startsWith('"')) {
+      elements.push(
+        <span key={key} className="text-emerald-600 dark:text-emerald-400">
+          {token}
+        </span>,
+      );
+    } else if (token === "true" || token === "false") {
+      elements.push(
+        <span
+          key={key}
+          className="font-semibold text-violet-600 dark:text-violet-400"
+        >
+          {token}
+        </span>,
+      );
+    } else if (token === "null") {
+      elements.push(
+        <span key={key} className="font-mono text-rose-500/90 dark:text-rose-400">
+          {token}
+        </span>,
+      );
+    } else if (/^-?\d/.test(token)) {
+      elements.push(
+        <span key={key} className="font-mono text-amber-600 dark:text-amber-400">
+          {token}
+        </span>,
+      );
+    } else {
+      elements.push(
+        <span key={key} className="font-medium text-muted-foreground/60">
+          {token}
+        </span>,
+      );
+    }
+    lastIndex = match.index + token.length;
+  }
+
+  if (lastIndex < json.length) {
+    elements.push(json.slice(lastIndex));
+  }
+
+  return elements.length > 0 ? elements : json;
+}
+
 function PreBlock({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = async () => {
@@ -420,6 +498,17 @@ function PreBlock({ text }: { text: string }) {
       toast.error("复制失败");
     }
   };
+
+  const highlighted = useMemo(() => {
+    if (!text || text === "—") return text;
+    // 超长报文(长上下文可达数百 KB)高亮会生成数万 span 拖慢弹窗渲染:超限退纯文本
+    if (text.length > 200_000) return text;
+    try {
+      return highlightJson(text);
+    } catch {
+      return text;
+    }
+  }, [text]);
 
   return (
     <div className="group relative rounded-xl border border-border/80 bg-muted/30 transition-all focus-within:border-primary/40">
@@ -442,8 +531,8 @@ function PreBlock({ text }: { text: string }) {
           )}
         </button>
       </div>
-      <pre className="max-h-64 overflow-auto p-3.5 font-mono text-xs leading-relaxed whitespace-pre-wrap break-all text-foreground/90">
-        {text}
+      <pre className="max-h-64 overflow-auto p-3.5 font-mono text-xs leading-relaxed whitespace-pre-wrap break-all select-text text-foreground/90">
+        {highlighted}
       </pre>
     </div>
   );
@@ -465,6 +554,8 @@ function LogDetailDialog({
     queryKey: ["prices"],
     queryFn: api.listModelPrices,
   });
+  const { data: settings } = useSettings();
+  const [copiedCurl, setCopiedCurl] = useState(false);
 
   const detail: LogDetail | null | undefined = d;
   const attempts: AttemptEntry[] =
@@ -484,8 +575,10 @@ function LogDetailDialog({
 
   return (
     <Dialog open={id != null} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[85vh] max-w-4xl overflow-auto">
-        <DialogHeader>
+      {/* flex 列布局 + overflow-hidden:标题/右上角关闭按钮固定于弹窗顶部,
+          仅下方内容区滚动(与 KeyDialog 同一滚动态势范式) */}
+      <DialogContent className="flex max-h-[85vh] max-w-4xl flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
           <DialogTitle>请求详情</DialogTitle>
           <DialogDescription>
             {detail
@@ -493,6 +586,8 @@ function LogDetailDialog({
               : "加载中…"}
           </DialogDescription>
         </DialogHeader>
+        {/* 滚动容器:min-h-0 允许在 flex 列中收缩,滚动条用 -mr-2/pr-2 贴弹窗内缘 */}
+        <div className="-mr-2 min-h-0 flex-1 overflow-y-auto pr-2">
         {detail && (
           <div className="grid gap-5">
             <div className="space-y-2">
@@ -670,7 +765,39 @@ function LogDetailDialog({
             </div>
 
             <div className="space-y-2">
-              <h4 className="text-sm font-semibold">请求体快照</h4>
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-semibold">请求体快照</h4>
+                {detail.reqSnapshot && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 gap-1.5 px-2 text-xs shadow-2xs"
+                    onClick={async () => {
+                      const host = `http://${settings?.listenAddr ?? "127.0.0.1"}:${settings?.port ?? 8787}/v1/chat/completions`;
+                      const body = prettyBody(detail.reqSnapshot);
+                      const authHeader = detail.keyName
+                        ? `  -H "Authorization: Bearer <YOUR_API_KEY>" \\\n`
+                        : "";
+                      const curl = `curl -X POST "${host}" \\\n  -H "Content-Type: application/json" \\\n${authHeader}  -d '${body.replace(/'/g, "'\\''")}'`;
+                      try {
+                        await navigator.clipboard.writeText(curl);
+                        setCopiedCurl(true);
+                        toast.success("已复制为可执行的 cURL 复现命令");
+                        setTimeout(() => setCopiedCurl(false), 2000);
+                      } catch {
+                        toast.error("复制失败");
+                      }
+                    }}
+                  >
+                    {copiedCurl ? (
+                      <Check className="h-3.5 w-3.5 text-success" />
+                    ) : (
+                      <Terminal className="h-3.5 w-3.5 text-primary" />
+                    )}
+                    {copiedCurl ? "cURL 已复制" : "复制为 cURL"}
+                  </Button>
+                )}
+              </div>
               <PreBlock text={prettyBody(detail.reqSnapshot)} />
             </div>
             <div className="space-y-2">
@@ -679,6 +806,7 @@ function LogDetailDialog({
             </div>
           </div>
         )}
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -759,10 +887,12 @@ function ModelBadge({ model }: { model: string }) {
 function LogRow({
   log: l,
   channels,
+  isNew,
   onDetail,
 }: {
   log: LogItem;
   channels: Channel[] | undefined;
+  isNew?: boolean;
   onDetail: () => void;
 }) {
   const attemptCount = parseAttempts(l.attempts).length;
@@ -776,12 +906,24 @@ function LogRow({
     (s) => (l.client && s.clientIcons[l.client]) || null,
   );
   const clientDisplay = clientAlias ?? l.client;
+  const isErr = l.status >= 400 || !!l.error;
+
   return (
-    <tr
+    <motion.tr
+      layout
+      initial={isNew ? { opacity: 0, y: -16, scale: 0.99 } : false}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
       onClick={onDetail}
-      className="group/row cursor-pointer border-b text-center transition-colors duration-150 hover:bg-accent/60 even:bg-muted/15 last:border-0"
+      className={cn(
+        "group/row relative cursor-pointer border-b text-center transition-colors duration-150 hover:bg-accent/60 even:bg-muted/15 last:border-0",
+        isNew && (isErr ? "animate-log-flash-error z-10" : "animate-log-flash-success z-10"),
+      )}
     >
-      <td className="whitespace-nowrap py-1.5 pr-1 font-mono text-xs" title={fmtFullTime(l.ts)}>
+      <td
+        className="w-20 whitespace-nowrap py-1.5 pr-1 font-mono text-xs"
+        title={fmtFullTime(l.ts)}
+      >
         {fmtTime(l.ts)}
       </td>
       <td className="py-1.5 pr-1">
@@ -936,7 +1078,7 @@ function LogRow({
           详情
         </Button>
       </td>
-    </tr>
+    </motion.tr>
   );
 }
 
@@ -954,6 +1096,8 @@ export function DashboardPage() {
   const [keyFilter, setKeyFilter] = useState("all");
   // 模型筛选(精确匹配),all = 全部模型
   const [modelFilter, setModelFilter] = useState("all");
+  const [statusClass, setStatusClass] = useState<"all" | "success" | "error">("all");
+  const [keyword, setKeyword] = useState("");
   const [page, setPage] = useState(0);
   const [detailId, setDetailId] = useState<number | null>(null);
   const tableRef = useRef<HTMLTableElement>(null);
@@ -966,15 +1110,60 @@ export function DashboardPage() {
       channelId: channelFilter === "all" ? null : Number(channelFilter),
       keyId: keyFilter === "all" ? null : Number(keyFilter),
       model: modelFilter === "all" ? undefined : modelFilter,
+      statusClass: statusClass === "all" ? undefined : statusClass,
+      keyword: keyword.trim() || undefined,
       offset: page * PAGE_SIZE,
       limit: PAGE_SIZE,
     }),
-    [range, channelFilter, keyFilter, modelFilter, page],
+    [range, channelFilter, keyFilter, modelFilter, statusClass, keyword, page],
   );
 
   const { data: stats } = useStats(filter);
   const { data, isLoading, isFetching } = useLogs(filter);
   const [items, total] = data ?? [[], 0];
+
+  // 跟踪新入列的日志:首次加载记录基线;之后仅"时间晚于已知最新记录"的行标记为
+  // isNew(入场流光)。翻页/切筛选时旧记录的 ID 同样"未见过",若只按 ID 判定会整页
+  // 全部误闪,必须叠加时间戳条件
+  const knownIdsRef = useRef<Set<number>>(new Set());
+  const maxTsRef = useRef<number>(0);
+  const isFirstLoadRef = useRef(true);
+  const [newLogIds, setNewLogIds] = useState<Set<number>>(new Set());
+
+  useEffect(() => {
+    if (items.length === 0) return;
+    if (isFirstLoadRef.current) {
+      isFirstLoadRef.current = false;
+      knownIdsRef.current = new Set(items.map((it) => it.id));
+      maxTsRef.current = Math.max(...items.map((it) => it.ts));
+      return;
+    }
+
+    const brandNew = items
+      .filter(
+        (it) => !knownIdsRef.current.has(it.id) && it.ts > maxTsRef.current,
+      )
+      .map((it) => it.id);
+
+    if (brandNew.length > 0) {
+      brandNew.forEach((id) => knownIdsRef.current.add(id));
+      maxTsRef.current = Math.max(
+        maxTsRef.current,
+        ...items.map((it) => it.ts),
+      );
+      setNewLogIds((prev) => new Set([...prev, ...brandNew]));
+      // 2.2 秒后移除发光高亮标记，平滑恢复常态
+      const t = setTimeout(() => {
+        setNewLogIds((prev) => {
+          const next = new Set(prev);
+          brandNew.forEach((id) => next.delete(id));
+          return next;
+        });
+      }, 2200);
+      return () => clearTimeout(t);
+    }
+  }, [items]);
+
   // 表格 + 统计卡内容真实宽度 → 反推窗口最小宽度(见 useMinWindowWidthForContent)。
   // enabled 必须放这:数据到位后 <table> 才会渲染,冷启动首帧表格还不存在
   const tableMounted = !isLoading && items.length > 0;
@@ -993,7 +1182,9 @@ export function DashboardPage() {
   const activeFilterCount =
     (channelFilter !== "all" ? 1 : 0) +
     (keyFilter !== "all" ? 1 : 0) +
-    (modelFilter !== "all" ? 1 : 0);
+    (modelFilter !== "all" ? 1 : 0) +
+    (statusClass !== "all" ? 1 : 0) +
+    (keyword.trim() !== "" ? 1 : 0);
 
   return (
     // flex 列布局:日志卡片 flex-1 弹性占满剩余视口高度,底部不留空白
@@ -1121,12 +1312,91 @@ export function DashboardPage() {
             ))}
           </SelectContent>
         </Select>
+
+        {/* 状态快筛: 全部 / 仅成功 / 仅异常 */}
+        <div className="flex items-center rounded-lg border border-border/80 bg-muted/60 p-0.5 shadow-2xs">
+          <button
+            type="button"
+            onClick={() => {
+              setStatusClass("all");
+              resetPage();
+            }}
+            className={cn(
+              "rounded-md px-2.5 py-1 text-xs font-medium transition-colors select-none",
+              statusClass === "all"
+                ? "bg-background text-foreground font-semibold shadow-2xs"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            全部
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setStatusClass("success");
+              resetPage();
+            }}
+            className={cn(
+              "inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors select-none",
+              statusClass === "success"
+                ? "bg-background text-emerald-600 dark:text-emerald-400 font-semibold shadow-2xs"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+            仅成功
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setStatusClass("error");
+              resetPage();
+            }}
+            className={cn(
+              "inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors select-none",
+              statusClass === "error"
+                ? "bg-background text-destructive font-semibold shadow-2xs"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-destructive animate-pulse" />
+            仅异常
+          </button>
+        </div>
+
+        {/* 关键词/报错实时搜索 */}
+        <div className="relative w-40 sm:w-52">
+          <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground/60" />
+          <Input
+            value={keyword}
+            onChange={(e) => {
+              setKeyword(e.target.value);
+              resetPage();
+            }}
+            placeholder="搜索模型 / 报错信息…"
+            className="h-8 bg-background/60 pl-8 pr-7 text-xs shadow-2xs"
+          />
+          {keyword && (
+            <button
+              onClick={() => {
+                setKeyword("");
+                resetPage();
+              }}
+              className="absolute right-2 top-2 text-muted-foreground/60 hover:text-foreground"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+
         {activeFilterCount > 0 && (
           <button
             onClick={() => {
               setChannelFilter("all");
               setKeyFilter("all");
               setModelFilter("all");
+              setStatusClass("all");
+              setKeyword("");
               resetPage();
             }}
             className="inline-flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary shadow-2xs transition-all hover:bg-primary/20 active:scale-95"
@@ -1237,11 +1507,36 @@ export function DashboardPage() {
               <Loader2 className="mr-2 h-4 w-4 animate-spin" /> 加载中…
             </div>
           ) : items.length === 0 ? (
-            <div className="flex flex-col items-center gap-2 py-10 text-center">
-              <ScrollText className="h-8 w-8 text-muted-foreground/50" />
-              <p className="text-sm text-muted-foreground">
-                当前筛选条件下暂无请求
-              </p>
+            <div className="flex h-full items-center justify-center p-6">
+              <EmptyState
+                icon={ScrollText}
+                title={
+                  activeFilterCount > 0
+                    ? "未找到匹配当前筛选条件的请求"
+                    : "网关服务已就绪，等待首次请求"
+                }
+                description={
+                  activeFilterCount > 0
+                    ? "当前时间范围或渠道/密钥/模型筛选下暂无记录，您可以尝试重置筛选条件"
+                    : "请在第三方客户端（Claude Code / Cursor / Cherry Studio）中配置网关地址发起调用"
+                }
+              >
+                {activeFilterCount > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5 text-xs shadow-2xs"
+                    onClick={() => {
+                      setChannelFilter("all");
+                      setKeyFilter("all");
+                      setModelFilter("all");
+                      resetPage();
+                    }}
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" /> 清空筛选条件
+                  </Button>
+                )}
+              </EmptyState>
             </div>
           ) : (
             <table ref={tableRef} className="w-max min-w-full text-sm">
@@ -1256,7 +1551,7 @@ export function DashboardPage() {
                     表格只是溢出出横向滚动条,列内容依然完整可读。
                     任务耗时列内容与表头均左对齐(竖条锚点行),其余居中。 */}
                 <tr className="border-b text-center text-xs text-muted-foreground">
-                  <th className="whitespace-nowrap py-2 pr-1 font-medium">时间</th>
+                  <th className="w-20 whitespace-nowrap py-2 pr-1 font-medium">时间</th>
                   <th className="whitespace-nowrap py-2 pr-1 font-medium">模型</th>
                   <th className="whitespace-nowrap py-2 pr-1 font-medium">推理</th>
                   <th className="whitespace-nowrap py-2 pr-1 font-medium">渠道</th>
@@ -1275,6 +1570,7 @@ export function DashboardPage() {
                     key={l.id}
                     log={l}
                     channels={channels}
+                    isNew={newLogIds.has(l.id)}
                     onDetail={() => setDetailId(l.id)}
                   />
                 ))}

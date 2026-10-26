@@ -1,6 +1,6 @@
 [package]
 name = "llm-desktop"
-version = "0.1.12"
+version = "0.1.13"
 description = "本地 LLM API 网关"
 edition = "2021"
 

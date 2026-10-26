@@ -230,6 +230,12 @@ export interface LogDetail extends LogItem {
   respSnapshot: string | null;
 }
 
+export interface DatabaseStats {
+  dbSizeBytes: number;
+  walSizeBytes: number;
+  logCount: number;
+}
+
 export interface StatsSummary {
   count: number;
   /** 人民币微元(1e-6 元) */

@@ -9,12 +9,15 @@ import {
   Eye,
   EyeOff,
   ImagePlus,
+  LayoutGrid,
+  LayoutList,
   Loader2,
   Pencil,
   Plus,
   Power,
   RefreshCw,
   RotateCcw,
+  Sparkles,
   Trash2,
   Zap,
 } from "lucide-react";
@@ -32,6 +35,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { ProtocolBadge } from "@/components/ProtocolBadge";
+import { useConfirm } from "@/components/ConfirmDialog";
+import { EmptyState } from "@/components/EmptyState";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -526,6 +531,61 @@ function ModelsField({
 
 // ---------- 渠道编辑 Dialog ----------
 
+const CHANNEL_PRESETS: Array<{
+  label: string;
+  dot: string;
+  preset: Partial<Channel>;
+}> = [
+  {
+    label: "DeepSeek 官方",
+    dot: "bg-cyan-500",
+    preset: {
+      name: "DeepSeek 官方",
+      protocol: "openai",
+      baseUrl: "https://api.deepseek.com",
+      models: ["deepseek-chat", "deepseek-reasoner"],
+      priceCurrency: "cny",
+    },
+  },
+  {
+    label: "Anthropic 官方",
+    dot: "bg-primary",
+    preset: {
+      name: "Anthropic 官方",
+      protocol: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      models: [
+        "claude-3-7-sonnet-20250219",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-5-haiku-20241022",
+      ],
+      priceCurrency: "usd",
+    },
+  },
+  {
+    label: "OpenAI 官方",
+    dot: "bg-emerald-500",
+    preset: {
+      name: "OpenAI 官方",
+      protocol: "openai",
+      baseUrl: "https://api.openai.com",
+      models: ["gpt-4o", "gpt-4o-mini", "o1", "o3-mini"],
+      priceCurrency: "usd",
+    },
+  },
+  {
+    label: "Google Gemini",
+    dot: "bg-indigo-500",
+    preset: {
+      name: "Google Gemini 官方",
+      protocol: "gemini",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      models: ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
+      priceCurrency: "usd",
+    },
+  },
+];
+
 function ChannelDialog({
   open,
   editing,
@@ -593,6 +653,30 @@ function ChannelDialog({
           <DialogTitle>{form.id === 0 ? "新建渠道" : "编辑渠道"}</DialogTitle>
         </DialogHeader>
         <div className="-mr-2 grid min-h-0 flex-1 gap-4 overflow-y-auto pr-2">
+          {/* 新建渠道时的主流厂商一键模版 */}
+          {form.id === 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-border/80 bg-muted/30 p-2.5 shadow-2xs">
+              <span className="mr-1 flex items-center gap-1 text-xs font-medium text-muted-foreground">
+                <Sparkles className="h-3.5 w-3.5 text-primary" />
+                快速填入预设:
+              </span>
+              {CHANNEL_PRESETS.map((p) => (
+                <button
+                  key={p.label}
+                  type="button"
+                  onClick={() => {
+                    patch(p.preset);
+                    toast.success(`已载入「${p.label}」模版参数`);
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border/80 bg-background/80 px-2 py-1 text-xs font-medium shadow-2xs transition-all hover:border-primary/50 hover:bg-background hover:text-foreground active:scale-95"
+                >
+                  <span className={cn("h-1.5 w-1.5 rounded-full", p.dot)} />
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* 第一行: 名称 + 计费币种 */}
           <div className="grid grid-cols-[minmax(0,1fr)_130px] items-end gap-4">
             <div className="space-y-1.5">
@@ -932,9 +1016,11 @@ function ChannelDialog({
 function TestChannelDialog({
   channel,
   onClose,
+  onTested,
 }: {
   channel: Channel | null;
   onClose: () => void;
+  onTested?: (channelId: number, result: TestChannelResult) => void;
 }) {
   const open = channel !== null;
   // 只列当前渠道的对外模型名(白名单):发给上游的是对外名,由网关做映射,
@@ -961,7 +1047,10 @@ function TestChannelDialog({
         prompt.trim() || undefined,
         model || undefined,
       ),
-    onSuccess: (r) => setResult(r),
+    onSuccess: (r) => {
+      setResult(r);
+      if (channel) onTested?.(channel.id, r);
+    },
     onError: (e) => toast.error(String(e)),
   });
 
@@ -1092,6 +1181,58 @@ function TestChannelDialog({
   );
 }
 
+function LatencyBadge({
+  result,
+  onRetest,
+}: {
+  result?: TestChannelResult;
+  onRetest: () => void;
+}) {
+  if (!result) return null;
+  if (!result.ok) {
+    return (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onRetest();
+        }}
+        className="inline-flex items-center gap-1 rounded-full border border-destructive/30 bg-destructive/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-destructive shadow-2xs transition-all hover:bg-destructive/20 active:scale-95 select-none"
+        title={`测试失败: ${result.message} (点击重试)`}
+      >
+        <Zap className="h-2.5 w-2.5" />
+        超时失败
+      </button>
+    );
+  }
+  const isFast = result.latencyMs < 300;
+  const isModerate = result.latencyMs < 1000;
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onRetest();
+      }}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[10px] font-semibold shadow-2xs transition-all active:scale-95 select-none",
+        isFast
+          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20"
+          : isModerate
+            ? "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"
+            : "border-destructive/30 bg-destructive/10 text-destructive hover:bg-destructive/20",
+      )}
+      title={`总耗时: ${result.latencyMs}ms${result.ttftMs != null ? ` · 首字: ${result.ttftMs}ms` : ""} (点击重试)`}
+    >
+      <Zap className="h-2.5 w-2.5 shrink-0" />
+      <span>{result.latencyMs}ms</span>
+      {result.ttftMs != null && (
+        <span className="opacity-75 font-normal">· {result.ttftMs}ms</span>
+      )}
+    </button>
+  );
+}
+
 // ---------- 渠道页 ----------
 
 export function ChannelsPage() {
@@ -1104,6 +1245,10 @@ export function ChannelsPage() {
   const [testTarget, setTestTarget] = useState<Channel | null>(null);
   const [copiedUrlId, setCopiedUrlId] = useState<number | null>(null);
   const [batchTesting, setBatchTesting] = useState(false);
+  const [latencyMap, setLatencyMap] = useState<Record<number, TestChannelResult>>({});
+  const [viewMode, setViewMode] = useState<"table" | "grid">("table");
+  // 删除二次确认:主题化弹窗(取代 window.confirm)
+  const confirm = useConfirm();
 
   const breakerOf = (id: number) =>
     breakers?.find((b) => b.channelId === id);
@@ -1124,13 +1269,18 @@ export function ChannelsPage() {
       );
       let okCount = 0;
       let failCount = 0;
-      results.forEach((r) => {
-        if (r.status === "fulfilled" && r.value.ok) {
-          okCount++;
+      const nextMap = { ...latencyMap };
+      results.forEach((r, idx) => {
+        const c = targets[idx];
+        if (r.status === "fulfilled") {
+          nextMap[c.id] = r.value;
+          if (r.value.ok) okCount++;
+          else failCount++;
         } else {
           failCount++;
         }
       });
+      setLatencyMap(nextMap);
       refresh();
       qc.invalidateQueries({ queryKey: ["breakers"] });
       if (failCount === 0) {
@@ -1156,6 +1306,36 @@ export function ChannelsPage() {
             </span>
           </CardTitle>
           <div className="flex items-center gap-2">
+            {/* 表格 / 卡片展台视图切换 */}
+            <div className="flex items-center rounded-lg border border-border/80 bg-muted/60 p-0.5 shadow-2xs">
+              <button
+                type="button"
+                onClick={() => setViewMode("table")}
+                className={cn(
+                  "rounded-md p-1 transition-colors select-none",
+                  viewMode === "table"
+                    ? "bg-background text-foreground shadow-2xs"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                title="紧凑表格视图"
+              >
+                <LayoutList className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode("grid")}
+                className={cn(
+                  "rounded-md p-1 transition-colors select-none",
+                  viewMode === "grid"
+                    ? "bg-background text-foreground shadow-2xs"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                title="立体卡片展台视图"
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+              </button>
+            </div>
+
             <Button
               variant="outline"
               size="sm"
@@ -1191,11 +1371,181 @@ export function ChannelsPage() {
               加载中…
             </div>
           ) : !channels?.length ? (
-            <div className="flex flex-col items-center gap-2 py-10 text-center">
-              <Cable className="h-8 w-8 text-muted-foreground/50" />
-              <p className="text-sm text-muted-foreground">
-                还没有渠道,点击"新建渠道"添加上游
-              </p>
+            <div className="py-6">
+              <EmptyState
+                icon={Cable}
+                title="暂无大模型上游渠道"
+                description="添加您的第一个大模型 API 渠道（支持 DeepSeek、Anthropic、OpenAI、Gemini 等各大主流厂商）"
+              >
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setEditing(emptyChannel());
+                    setDialogOpen(true);
+                  }}
+                  className="gap-1.5 shadow-2xs"
+                >
+                  <Plus className="h-4 w-4" /> 添加第一个渠道
+                </Button>
+              </EmptyState>
+            </div>
+          ) : viewMode === "grid" ? (
+            <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2 lg:grid-cols-3">
+              {channels.map((ch) => (
+                <div
+                  key={ch.id}
+                  className="card-elevated flex flex-col justify-between rounded-2xl border border-border/80 bg-card p-4 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
+                >
+                  {/* 顶部: 图标 + 渠道名称 + 协议微标 + 启停开关 */}
+                  <div className="flex items-start justify-between gap-2 border-b border-border/40 pb-3">
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-border/80 bg-muted/40 text-lg shadow-2xs">
+                        {ch.icon ? (
+                          ch.icon.startsWith("data:image/") ? (
+                            <img src={ch.icon} alt="" className="h-full w-full object-contain" />
+                          ) : (
+                            <span>{ch.icon}</span>
+                          )
+                        ) : (
+                          <Cable className="h-5 w-5 text-muted-foreground" />
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <h4 className="truncate text-sm font-semibold text-foreground">
+                          {ch.name}
+                        </h4>
+                        <div className="mt-0.5 flex items-center gap-1.5">
+                          <ProtocolBadge protocol={ch.protocol} />
+                          {ch.priceCurrency === "usd" && (
+                            <span className="rounded border px-1 font-mono text-[10px] text-muted-foreground">
+                              USD
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <Switch
+                      checked={ch.enabled}
+                      onCheckedChange={async () => {
+                        try {
+                          await api.setChannelEnabled(ch.id, !ch.enabled);
+                          refresh();
+                        } catch (e) {
+                          toast.error(String(e));
+                        }
+                      }}
+                    />
+                  </div>
+
+                  {/* 中间: BaseURL + 熔断状态 + 测速 */}
+                  <div className="my-3 space-y-2">
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                      <span className="max-w-[200px] truncate font-mono text-[11px]" title={ch.baseUrl}>
+                        {ch.baseUrl}
+                      </span>
+                      <button
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(ch.baseUrl);
+                            setCopiedUrlId(ch.id);
+                            toast.success("BaseURL 已复制");
+                            setTimeout(() => setCopiedUrlId(null), 1500);
+                          } catch {
+                            toast.error("复制失败");
+                          }
+                        }}
+                        className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                        title="复制 BaseURL"
+                      >
+                        {copiedUrlId === ch.id ? (
+                          <Check className="h-3 w-3 text-success" />
+                        ) : (
+                          <Copy className="h-3 w-3" />
+                        )}
+                      </button>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {breakerBadge(ch.enabled, breakerOf(ch.id))}
+                      <LatencyBadge
+                        result={latencyMap[ch.id]}
+                        onRetest={() => setTestTarget(ch)}
+                      />
+                    </div>
+                  </div>
+
+                  {/* 底部: 模型概要 + 动作工具栏 */}
+                  <div className="flex items-center justify-between border-t border-border/40 pt-3">
+                    <div className="truncate font-mono text-xs text-muted-foreground">
+                      {ch.models.length === 0 ? "不限模型" : `${ch.models.length} 个模型`}
+                      {Object.keys(ch.modelMap).length > 0 && ` · 映射 ${Object.keys(ch.modelMap).length}`}
+                    </div>
+                    <div className="flex items-center gap-0.5">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        title="测试连通性"
+                        className="h-7 w-7 text-muted-foreground hover:bg-amber-500/15 hover:text-amber-600 dark:hover:text-amber-400"
+                        onClick={() => setTestTarget(ch)}
+                      >
+                        <Zap className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        title="手动恢复熔断"
+                        className="h-7 w-7 text-muted-foreground hover:bg-sky-500/15 hover:text-sky-600 dark:hover:text-sky-400"
+                        onClick={async () => {
+                          try {
+                            await api.recoverChannel(ch.id);
+                            toast.success("已手动恢复");
+                          } catch (e) {
+                            toast.error(String(e));
+                          }
+                        }}
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        title="编辑"
+                        className="h-7 w-7 text-muted-foreground hover:bg-accent hover:text-foreground"
+                        onClick={() => {
+                          setEditing(structuredClone(ch));
+                          setDialogOpen(true);
+                        }}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        title="删除"
+                        className="h-7 w-7 text-muted-foreground hover:bg-destructive/15 hover:text-destructive"
+                        onClick={async () => {
+                          if (
+                            !(await confirm({
+                              title: "删除渠道",
+                              message: `确认删除渠道「${ch.name}」?其上游密钥与映射将一并移除,且不可恢复。`,
+                            }))
+                          )
+                            return;
+                          try {
+                            await api.deleteChannel(ch.id);
+                            refresh();
+                            toast.success("已删除");
+                          } catch (e) {
+                            toast.error(String(e));
+                          }
+                        }}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           ) : (
             <table className="w-full text-sm">
@@ -1298,7 +1648,13 @@ export function ChannelsPage() {
                       </div>
                     </td>
                     <td className="py-2.5 pr-3">
-                      {breakerBadge(ch.enabled, breakerOf(ch.id))}
+                      <div className="flex flex-col items-start gap-1">
+                        {breakerBadge(ch.enabled, breakerOf(ch.id))}
+                        <LatencyBadge
+                          result={latencyMap[ch.id]}
+                          onRetest={() => setTestTarget(ch)}
+                        />
+                      </div>
                     </td>
                     <td className="py-2.5">
                       <div className="flex items-center gap-0.5">
@@ -1368,9 +1724,10 @@ export function ChannelsPage() {
                           onClick={async () => {
                             // 删除渠道连带其配置,不可恢复:二次确认
                             if (
-                              !window.confirm(
-                                `确认删除渠道「${ch.name}」?其上游密钥与映射将一并移除,且不可恢复。`,
-                              )
+                              !(await confirm({
+                                title: "删除渠道",
+                                message: `确认删除渠道「${ch.name}」?其上游密钥与映射将一并移除,且不可恢复。`,
+                              }))
                             )
                               return;
                             try {
@@ -1403,6 +1760,7 @@ export function ChannelsPage() {
       <TestChannelDialog
         channel={testTarget}
         onClose={() => setTestTarget(null)}
+        onTested={(id, r) => setLatencyMap((prev) => ({ ...prev, [id]: r }))}
       />
       <div className={cn("h-2")} />
     </div>

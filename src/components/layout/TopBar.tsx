@@ -1,7 +1,7 @@
 // 自绘标题栏(Tauri decorations:false):单栏融合应用名、页面标题、服务操作与窗口控制。
 // 参考 CC Switch 布局:左侧应用标识 + 中部页面标题 + 右侧主操作与 最小化/最大化/关闭。
 // 拖拽移动经 data-tauri-drag-region;窗口控制走 @tauri-apps/api/window。
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Check, Copy, Loader2, Minus, Moon, Play, Square, Sun, X } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -21,6 +21,18 @@ const PAGE_TITLES: Record<PageKey, string> = {
   settings: "应用设置",
 };
 
+function formatUptime(seconds: number): string {
+  if (seconds < 60) return "刚刚启动";
+  const m = Math.floor(seconds / 60);
+  if (m < 60) return `已运行 ${m}分钟`;
+  const h = Math.floor(m / 60);
+  const remM = m % 60;
+  if (h < 24) return `已运行 ${h}小时${remM > 0 ? `${remM}分` : ""}`;
+  const d = Math.floor(h / 24);
+  const remH = h % 24;
+  return `已运行 ${d}天${remH > 0 ? `${remH}时` : ""}`;
+}
+
 const appWindow = getCurrentWindow();
 
 export function TopBar({ page }: TopBarProps) {
@@ -30,6 +42,26 @@ export function TopBar({ page }: TopBarProps) {
   const resolvedTheme = useAppStore((s) => s.resolvedTheme);
   const [maximized, setMaximized] = useState(false);
   const [copiedHost, setCopiedHost] = useState(false);
+  const [uptimeText, setUptimeText] = useState("刚刚启动");
+  // 计时起点用 ref 存放:放进 effect 依赖会在"停止"分支造成 set→依赖变→重跑的死循环渲染
+  const startedAtRef = useRef<number>(Date.now());
+
+  // 服务运行状态与持续时间计时器
+  useEffect(() => {
+    if (status?.running) {
+      // 每次从停止转为运行时重置起点;运行中依赖不变,effect 不会重跑
+      startedAtRef.current = Date.now();
+      const update = () =>
+        setUptimeText(
+          formatUptime(Math.floor((Date.now() - startedAtRef.current) / 1000)),
+        );
+      update();
+      const timer = setInterval(update, 10000);
+      return () => clearInterval(timer);
+    }
+    // 服务停止或尚未就绪:固定文案。同值 setState 会被 React bail out,无渲染风暴
+    setUptimeText("刚刚启动");
+  }, [status?.running]);
 
   // 最大化状态跟踪:切换图标(还原/最大化)与提示
   useEffect(() => {
@@ -126,6 +158,11 @@ export function TopBar({ page }: TopBarProps) {
             ? (status.addr ?? "运行中")
             : `已停止 · ${settings?.listenAddr ?? "127.0.0.1"}:${settings?.port ?? 8787}`}
         </span>
+        {status?.running && (
+          <span className="border-l border-border/60 pl-2 font-sans text-[11px] text-muted-foreground/80">
+            {uptimeText}
+          </span>
+        )}
         {copiedHost ? (
           <Check className="h-3 w-3 shrink-0 text-success" />
         ) : (

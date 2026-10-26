@@ -20,6 +20,10 @@ export function usePrices() {
   return useQuery({ queryKey: ["prices"], queryFn: api.listModelPrices });
 }
 
+export function useLanIp() {
+  return useQuery({ queryKey: ["lan-ip"], queryFn: api.getLanIp, staleTime: 60_000 });
+}
+
 export function useUnpricedModels() {
   return useQuery({ queryKey: ["unpriced"], queryFn: api.listUnpricedModels });
 }
